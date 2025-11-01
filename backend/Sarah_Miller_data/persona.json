@@ -1,0 +1,77 @@
+{
+  "first_name": "Sarah",
+  "last_name": "Miller",
+  "age": "28",
+  "gender": "Female",
+  "race": "Not specified",
+  "street": "Inner Sunset neighborhood",
+  "city": "San Francisco",
+  "state": "CA",
+  "zip_code": "94122",
+  "spoken_language": "English",
+  "education_background": "B.S. in Computer Science, UC Berkeley",
+  "education_level": "bachelor's degree",
+  "birthday": "1997-06-15",
+  "job": "Software Engineer",
+  "income": "$150,000",
+  "income_level": "moderate high income",
+  "marital_status": "single",
+  "parental_status": "not parents",
+  "online_behavior": "Active on GitHub and Twitter; frequently uses Stack Overflow, Reddit, and online learning platforms. Uses fitness apps (Strava, Apple Health) to track runs.",
+  "industry": "technology",
+  "employer_size": "large employer (250-10,000 employees)",
+  "homeownership": "renter",
+  "short_profile": "28-year-old software engineer living in San Francisco who enjoys morning runs in Golden Gate Park and contributes to open-source projects in her free time.",
+  "age_type": "young",
+  "gender_type": "female",
+  "location_type": "urban",
+  "income_type": "high",
+  "edu_type": "high",
+  "activity_description": "running",
+  "sensors": [
+    {
+      "id": "run-001",
+      "name": "Morning Run - Golden Gate Park",
+      "coordSys": "WGS84",
+      "points": [
+        {
+          "latitude": 37.7694,
+          "longitude": -122.4862
+        },
+        {
+          "latitude": 37.7689,
+          "longitude": -122.4825
+        },
+        {
+          "latitude": 37.7715,
+          "longitude": -122.4547
+        }
+      ]
+    },
+    {
+      "id": "hr-001",
+      "time": 1730400000,
+      "moments": [
+        {
+          "elapsed": 600.0,
+          "data": {
+            "heart_rate": [
+              138.0
+            ]
+          }
+        },
+        {
+          "elapsed": 1200.0,
+          "data": {
+            "heart_rate": [
+              125.0
+            ]
+          }
+        }
+      ],
+      "sensorsInvolved": [
+        1
+      ]
+    }
+  ]
+}

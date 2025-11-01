@@ -1,0 +1,7 @@
+{
+  "plugins": ["@prettier/plugin-python"],
+  "printWidth": 88,
+  "tabWidth": 4,
+  "singleQuote": true,
+  "trailingComma": "es5"
+}

@@ -1,0 +1,65 @@
+{
+  "first_name": "John",
+  "last_name": "Miller",
+  "age": "45",
+  "gender": "male",
+  "race": "White",
+  "street": "123 Bleecker St",
+  "city": "New York",
+  "state": "NY",
+  "zip_code": "10012",
+  "spoken_language": "English",
+  "education_background": "B.A. in English Literature from New York University",
+  "education_level": "bachelor's degree",
+  "birthday": "1980-07-15",
+  "job": "Freelance writer (novels, essays, journalism)",
+  "income": "$65,000",
+  "income_level": "average or lower income",
+  "marital_status": "married",
+  "parental_status": "parents of teenagers",
+  "online_behavior": "Regularly researches topics online, publishes on a personal Substack, active on Twitter/X and literary forums, uses cloud storage and collaborative editing tools.",
+  "industry": "education",
+  "employer_size": "small employer (1-249 employees)",
+  "homeownership": "renter",
+  "short_profile": "45-year-old freelance writer living in Manhattan. Works on fiction and essays from cafes, balancing analog notebooks with a laptop.",
+  "age_type": "mid-aged",
+  "gender_type": "male",
+  "location_type": "urban",
+  "income_type": "medium",
+  "edu_type": "high",
+  "activity_description": "Sitting in a cafe in New York City, typing on his laptop and sipping coffee.",
+  "sensors": [
+    {
+      "id": "draw1",
+      "name": "Cafe Location",
+      "coordSys": "WGS84",
+      "points": [
+        {
+          "latitude": 40.730823,
+          "longitude": -73.997332
+        }
+      ]
+    },
+    {
+      "id": "laptopSession1",
+      "time": 1730380800,
+      "moments": [
+        {
+          "elapsed": 0.0,
+          "data": {
+            "activity": []
+          }
+        },
+        {
+          "elapsed": 3600.5,
+          "data": {
+            "activity": []
+          }
+        }
+      ],
+      "sensorsInvolved": [
+        1
+      ]
+    }
+  ]
+}

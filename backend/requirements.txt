@@ -1,0 +1,10 @@
+langchain
+langgraph
+python-dotenv
+langchain_openai
+langchain_community
+ipykernel
+beautifulsoup4
+langchain_text_splitters
+fastapi
+geopy
