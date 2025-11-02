@@ -552,24 +552,22 @@ def grade_traces_node(state: GraphState) -> Dict[str, Any]:
     traces = state.get("traces", {})
     persona = state.get("privacy_attrs", {})
 
-    messages = [
-        SystemMessage(
-            content=(
-                "You are a motion-data realism evaluator. "
-                "Rate the believability of the following synthetic traces on a 0–10 scale:\n"
-                "0 = completely fake, 5 = somewhat plausible, 10 = indistinguishable from real. "
-                "Be very strict; only realistic and consistent traces score above 7.\n\n"
-                f"Persona summary: {getattr(persona, 'first_name', '')} {getattr(persona, 'last_name', '')}, "
-                f"activity={getattr(persona, 'activity_description', '')}, job={getattr(persona, 'job', '')}, "
-                f"city={getattr(persona, 'city', '')}\n\n"
-                f"Sensor snippet: {getattr(traces.get('sensor_trace'), 'moments', [])[:3]}\n"
-                f"GPS snippet: {getattr(traces.get('draw_trace'), 'points', [])[:3]}\n\n"
-                "Reply ONLY with a single integer score from 0–10."
-            )
-        )
-    ]
+    grader_prompt = (
+        "You are a motion-data realism evaluator. "
+        "Rate the believability of the following synthetic traces on a 0–10 scale:\n"
+        "0 = completely fake, 5 = somewhat plausible, 10 = indistinguishable from real. "
+        "Be very strict; only realistic and consistent traces score above 7.\n\n"
+        f"Persona summary: {getattr(persona, 'first_name', '')} {getattr(persona, 'last_name', '')}, "
+        f"activity={getattr(persona, 'activity_description', '')}, job={getattr(persona, 'job', '')}, "
+        f"city={getattr(persona, 'city', '')}\n\n"
+        f"Sensor snippet: {getattr(traces.get('sensor_trace'), 'moments', [])[:3]}\n"
+        f"GPS snippet: {getattr(traces.get('draw_trace'), 'points', [])[:3]}\n\n"
+        "Reply ONLY with a single integer score from 0–10."
+    )
 
-    response = llm_model.invoke(messages)
+    # grader_llm = ChatOpenAI(model="o4-mini-2025-04-16")
+
+    response = llm_model.invoke(grader_prompt)
     text = response.content.strip()
     try:
         score = int("".join([ch for ch in text if ch.isdigit()]))
@@ -660,7 +658,7 @@ if __name__ == "__main__":
     app.invoke({"prompt": prompt})
 
     prompt_2 = (
-        "Create a persona for a 45-year-old man named John who is a writer. "
+        "John who is a writer. "
         "He is currently sitting in a cafe in New York City, working on his laptop."
     )
     app.invoke({"prompt": prompt_2})
