@@ -29,7 +29,7 @@ os.environ["LANGCHAIN_API_KEY"] = os.getenv("LANGCHAIN_API_KEY")
 os.environ["LANGCHAIN_SANDBOX_V1"] = "true"
 os.environ["LANGCHAIN_SANDBOX"] = os.getenv("LANGCHAIN_PROJECT")
 
-# llm_model = "gpt-5-mini-2025-08-07"
+# llm_model = ChatOpenAI(model="gpt-5-mini-2025-08-07")
 
 groq_api_key = os.getenv("GROQ_API_KEY")
 llm_model = ChatGroq(model="llama-3.3-70b-versatile", groq_api_key=groq_api_key)
@@ -161,7 +161,6 @@ class PersonaPackage(BaseModel):
 
 class PersonaGenerator:
     def __init__(self):
-        # self.llm = ChatOpenAI(model=llm_model)
         self.llm = llm_model
 
     def generate(self, messages: List[BaseMessage]) -> PrivacyAttributes:
@@ -564,8 +563,6 @@ def grade_traces_node(state: GraphState) -> Dict[str, Any]:
         f"GPS snippet: {getattr(traces.get('draw_trace'), 'points', [])[:3]}\n\n"
         "Reply ONLY with a single integer score from 0–10."
     )
-
-    # grader_llm = ChatOpenAI(model="o4-mini-2025-04-16")
 
     response = llm_model.invoke(grader_prompt)
     text = response.content.strip()
