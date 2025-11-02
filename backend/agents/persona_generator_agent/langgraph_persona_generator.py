@@ -1,15 +1,22 @@
+import datetime
 import json
 import os
 import random
 import time
 from typing import Any, Dict, List, Optional, TypedDict, Union
+from uu import Error
 import uuid
+from xxlimited import Null
 
 from dotenv import load_dotenv
 from geopy.geocoders import Nominatim
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, BaseMessage
+from persona_generation_prompt import system_message
+from langchain_groq import ChatGroq
+from langchain_core.prompts import ChatPromptTemplate
 
 
 # Load environment variables
@@ -19,6 +26,11 @@ load_dotenv()
 os.environ["LANGCHAIN_API_KEY"] = os.getenv("LANGCHAIN_API_KEY")
 os.environ["LANGCHAIN_SANDBOX_V1"] = "true"
 os.environ["LANGCHAIN_SANDBOX"] = os.getenv("LANGCHAIN_PROJECT")
+
+# llm_model = "gpt-5-mini-2025-08-07"
+
+groq_api_key = os.getenv("GROQ_API_KEY")
+llm_model = ChatGroq(model="llama-3.3-70b-versatile", groq_api_key=groq_api_key)
 
 
 # ----------------------
@@ -131,7 +143,7 @@ class PrivacyAttributes(BaseModel):
         description="Rate this persona educational level as low, medium, high"
     )
     activity_description: str = Field(
-        description="A description of the persona's current activity (e.g., 'running', 'sitting', 'commuting')."
+        description=f"A description of the persona's current activity (e.g., 'running', 'sitting', 'commuting', 'sitting at a bar', 'eating', 'sleeping', 'working', 'studying', 'reading', 'watching TV', 'listening to music', 'browsing the internet', 'socializing', 'other')."
     )
 
 
@@ -147,11 +159,12 @@ class PersonaPackage(BaseModel):
 
 class PersonaGenerator:
     def __init__(self):
-        self.llm = ChatOpenAI(model="gpt-5-mini-2025-08-07")
+        # self.llm = ChatOpenAI(model=llm_model)
+        self.llm = llm_model
 
-    def generate(self, prompt: str) -> PrivacyAttributes:
+    def generate(self, messages: List[BaseMessage]) -> PrivacyAttributes:
         structured_llm = self.llm.with_structured_output(PrivacyAttributes)
-        return structured_llm.invoke(prompt)
+        return structured_llm.invoke(messages)
 
 
 class SensorTraceGenerator:
@@ -333,17 +346,70 @@ def _ensure_traces(traces: Optional[Dict[str, BaseModel]]) -> Dict[str, BaseMode
 # 1) Generate PrivacyAttributes ONLY
 def generate_privacy_attrs_node(state: GraphState) -> Dict[str, Any]:
     prompt = state["prompt"]
+    messages = [SystemMessage(content=system_message), HumanMessage(content=prompt)]
     persona_generator = PersonaGenerator()
-    attrs = persona_generator.generate(prompt)
-
-    # Example lightweight guardrails you had in your code
-    if "John" in attrs.first_name:
-        attrs.city = "New York City"
-        attrs.activity_description = attrs.activity_description or "sitting"
-    elif "Sarah" in attrs.first_name:
-        attrs.activity_description = attrs.activity_description or "running"
+    attrs = persona_generator.generate(messages)
 
     return {"privacy_attrs": attrs}
+
+
+def persona_grader_node(state: GraphState) -> str:
+    """
+    Grade persona consistency and decide next step.
+    Returns either 'redo' (go back to regenerate) or 'ok' (proceed).
+    """
+    persona: PrivacyAttributes = state["privacy_attrs"]
+    report = []
+    score = 100
+
+    # --- AGE ↔ BIRTHDAY check ---
+    try:
+        birth_year = datetime.datetime.strptime(persona.birthday, "%Y-%m-%d").year
+        current_year = datetime.datetime.now().year
+        derived_age = current_year - birth_year
+        if abs(derived_age - int(persona.age)) > 1:
+            report.append(
+                f"Age mismatch: derived {derived_age} vs stated {persona.age}"
+            )
+            score -= 15
+    except Exception as e:
+        report.append(f"Invalid birthday format: {e}")
+        score -= 20
+
+    # --- ZIP ↔ format ---
+    if persona.zip_code:
+        if not persona.zip_code.isdigit() or len(persona.zip_code) not in (5, 9):
+            report.append("ZIP code format invalid")
+            score -= 10
+
+    # --- Occupation ↔ Income sanity ---
+    if persona.job and persona.income:
+        occ = persona.job.lower()
+        try:
+            income_val = int(str(persona.income).replace(",", "").replace("$", ""))
+        except ValueError:
+            income_val = 0
+
+        if ("intern" in occ or "assistant" in occ) and income_val > 80000:
+            report.append("Income too high for entry-level occupation")
+            score -= 10
+        elif (
+            "director" in occ or "vp" in occ or "founder" in occ
+        ) and income_val < 70000:
+            report.append("Income too low for senior occupation")
+            score -= 10
+
+    # --- ADDRESS completeness ---
+    missing = [f for f in [persona.city, persona.state] if not f]
+    if missing:
+        report.append("Incomplete address info")
+        score -= 5
+
+    # --- Decision ---
+    valid = score >= 75 and len(report) <= 2
+    decision = "proceed" if valid else "redo"
+    print(f"\n🧩 Persona Grader Results:\n  Score: {score}\n  Issues: {report}\n")
+    return {"decision": decision}
 
 
 # 2) Generate traces independently
@@ -404,12 +470,21 @@ def save_package_node(state: GraphState) -> Dict[str, Any]:
 workflow = StateGraph(GraphState)
 
 workflow.add_node("generate_privacy_attrs", generate_privacy_attrs_node)
+workflow.add_node("grade_persona", persona_grader_node)
 workflow.add_node("generate_traces", generate_traces_node)
 workflow.add_node("package_persona", package_persona_node)
 workflow.add_node("save_package", save_package_node)
 
 workflow.set_entry_point("generate_privacy_attrs")
-workflow.add_edge("generate_privacy_attrs", "generate_traces")
+workflow.add_edge("generate_privacy_attrs", "grade_persona")
+workflow.add_conditional_edges(
+    "grade_persona",
+    lambda output: output["decision"],  # the node returns either "proceed" or "redo"
+    {
+        "proceed": "generate_traces",
+        "redo": "generate_privacy_attrs",
+    },
+)
 workflow.add_edge("generate_traces", "package_persona")
 workflow.add_edge("package_persona", "save_package")
 workflow.add_edge("save_package", END)
@@ -420,6 +495,9 @@ app = workflow.compile()
 # Example Usage
 # -----------------------------------------
 if __name__ == "__main__":
+    prompt = "Sarah, software engineer in San Francisco, jogging in Golden Gate Park."
+    app.invoke({"prompt": prompt})
+
     prompt = (
         "Create a persona for a 28-year-old woman named Sarah who is a software engineer "
         "living in San Francisco. She is currently out for a morning run in Golden Gate Park."

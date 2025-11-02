@@ -2,6 +2,7 @@ langchain
 langgraph
 python-dotenv
 langchain_openai
+langchain_groq
 langchain_community
 ipykernel
 beautifulsoup4
