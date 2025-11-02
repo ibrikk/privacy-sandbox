@@ -1,15 +1,15 @@
-import os
-import uuid
-import time
 import json
+import os
 import random
-from typing import List, Dict, Union, Optional, TypedDict, Any
+import time
+from typing import Any, Dict, List, Optional, TypedDict, Union
+import uuid
 
 from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field
-from langgraph.graph import StateGraph, END
 from geopy.geocoders import Nominatim
+from langchain_openai import ChatOpenAI
+from langgraph.graph import END, StateGraph
+from pydantic import BaseModel, Field
 
 
 # Load environment variables
@@ -269,9 +269,6 @@ class BaseStationTraceGenerator:
         )
 
 
-from geopy.geocoders import Nominatim
-
-
 class DrawTraceGenerator:
     def __init__(self, persona: PrivacyAttributes, steps: int = 60):
         self.persona = persona
@@ -380,9 +377,7 @@ def package_persona_node(state: GraphState) -> Dict[str, Any]:
 def save_package_node(state: GraphState) -> Dict[str, Any]:
     package = state.get("persona_package")
     if not package:
-        raise ValueError(
-            "persona_package not found. Run package_persona_node first."
-        )
+        raise ValueError("persona_package not found. Run package_persona_node first.")
 
     attrs = package.persona
     traces = package.traces
