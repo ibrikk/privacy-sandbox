@@ -15,6 +15,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, BaseMessage
+
 from persona_generation_prompt import system_message
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
@@ -403,9 +404,9 @@ class BaseStationTraceGenerator:
 
 
 class DrawTraceGenerator:
-    def __init__(self, persona: PrivacyAttributes, steps: int = 60):
+    def __init__(self, persona: PrivacyAttributes, duration_s: int = 600):
         self.persona = persona
-        self.steps = steps
+        self.steps = max(60, duration_s)  # 1Hz default sampling
 
     def generate(self) -> DrawTrace:
         points = []
@@ -413,21 +414,14 @@ class DrawTraceGenerator:
         location = geolocator.geocode(f"{self.persona.city}, {self.persona.state}")
 
         if location:
-            start_lat, start_lon = location.latitude, location.longitude
+            lat, lon = location.latitude, location.longitude
         else:
-            # Use a default start location if not provided in persona
-            start_lat = 37.7749
-            start_lon = -122.4194
+            lat, lon = 37.7749, -122.4194
 
-        # A more realistic GPS trace would require more context from the persona,
-        # like a schedule with locations. For now, we'll just jitter around a point.
-
-        lat, lon = start_lat, start_lon
         for _ in range(self.steps):
-            lat_jitter = random.uniform(-0.0001, 0.0001)
-            lon_jitter = random.uniform(-0.0001, 0.0001)
-            lat += lat_jitter
-            lon += lon_jitter
+            # ~11m per jitter at latitude ≈37°, tunable for realism
+            lat += random.uniform(-0.0001, 0.0001)
+            lon += random.uniform(-0.0001, 0.0001)
             points.append(DrawPoint(latitude=lat, longitude=lon))
 
         return DrawTrace(
@@ -466,7 +460,10 @@ def _ensure_traces(traces: Optional[Dict[str, BaseModel]]) -> Dict[str, BaseMode
 # 1) Generate PrivacyAttributes ONLY
 def generate_privacy_attrs_node(state: GraphState) -> Dict[str, Any]:
     prompt = state["prompt"]
-    messages = [SystemMessage(content=system_message), HumanMessage(content=prompt)]
+    messages = [
+        SystemMessage(content=system_message),
+        HumanMessage(content=prompt),
+    ]
     persona_generator = PersonaGenerator()
     attrs = persona_generator.generate(messages)
 
@@ -551,6 +548,39 @@ def generate_traces_node(state: GraphState) -> Dict[str, Any]:
     }
 
 
+def grade_traces_node(state: GraphState) -> Dict[str, Any]:
+    traces = state.get("traces", {})
+    persona = state.get("privacy_attrs", {})
+
+    messages = [
+        SystemMessage(
+            content=(
+                "You are a motion-data realism evaluator. "
+                "Rate the believability of the following synthetic traces on a 0–10 scale:\n"
+                "0 = completely fake, 5 = somewhat plausible, 10 = indistinguishable from real. "
+                "Be very strict; only realistic and consistent traces score above 7.\n\n"
+                f"Persona summary: {getattr(persona, 'first_name', '')} {getattr(persona, 'last_name', '')}, "
+                f"activity={getattr(persona, 'activity_description', '')}, job={getattr(persona, 'job', '')}, "
+                f"city={getattr(persona, 'city', '')}\n\n"
+                f"Sensor snippet: {getattr(traces.get('sensor_trace'), 'moments', [])[:3]}\n"
+                f"GPS snippet: {getattr(traces.get('draw_trace'), 'points', [])[:3]}\n\n"
+                "Reply ONLY with a single integer score from 0–10."
+            )
+        )
+    ]
+
+    response = llm_model.invoke(messages)
+    text = response.content.strip()
+    try:
+        score = int("".join([ch for ch in text if ch.isdigit()]))
+    except ValueError:
+        score = 0
+
+    decision = "proceed" if score >= 7 else "redo"
+    print(f"\n🤖 LLM Trace Score: {score}/10\nDecision: {decision}\n")
+    return {"decision": decision, "score": score}
+
+
 # 3) Package persona and traces together
 def package_persona_node(state: GraphState) -> Dict[str, Any]:
     attrs = _ensure_privacy_attrs(state.get("privacy_attrs"))
@@ -594,6 +624,7 @@ workflow = StateGraph(GraphState)
 workflow.add_node("generate_privacy_attrs", generate_privacy_attrs_node)
 workflow.add_node("grade_persona", persona_grader_node)
 workflow.add_node("generate_traces", generate_traces_node)
+workflow.add_node("grade_traces_node", grade_traces_node)
 workflow.add_node("package_persona", package_persona_node)
 workflow.add_node("save_package", save_package_node)
 
@@ -607,7 +638,15 @@ workflow.add_conditional_edges(
         "redo": "generate_privacy_attrs",
     },
 )
-workflow.add_edge("generate_traces", "package_persona")
+workflow.add_edge("generate_traces", "grade_traces_node")
+workflow.add_conditional_edges(
+    "grade_traces_node",
+    lambda x: x["decision"],
+    {
+        "proceed": "package_persona",
+        "redo": "generate_traces",
+    },
+)
 workflow.add_edge("package_persona", "save_package")
 workflow.add_edge("save_package", END)
 
@@ -618,12 +657,6 @@ app = workflow.compile()
 # -----------------------------------------
 if __name__ == "__main__":
     prompt = "Sarah, software engineer in San Francisco, jogging in Golden Gate Park."
-    app.invoke({"prompt": prompt})
-
-    prompt = (
-        "Create a persona for a 28-year-old woman named Sarah who is a software engineer "
-        "living in San Francisco. She is currently out for a morning run in Golden Gate Park."
-    )
     app.invoke({"prompt": prompt})
 
     prompt_2 = (
