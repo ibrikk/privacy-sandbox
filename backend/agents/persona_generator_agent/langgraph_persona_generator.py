@@ -1,5 +1,6 @@
 import datetime
 import json
+import math
 import os
 import random
 import time
@@ -172,6 +173,7 @@ class SensorTraceGenerator:
         self.persona = persona
         self.duration_s = duration_s
         self.fps = fps
+        # From Android documentation
         self.sensor_id_map = {
             "accelerometer": 1,
             "magnetic_field": 2,
@@ -186,25 +188,94 @@ class SensorTraceGenerator:
         }
         self.activity_sensor_map = {
             "running": {
-                "accelerometer": {"mean": 5.0, "drift": 1.5},
-                "gyroscope": {"mean": 2.0, "drift": 0.8},
-                "step_counter": {"mean": 2.0, "drift": 0.5},
-                "step_detector": {"mean": 1.0, "drift": 0.1},
-                "linear_acceleration": {"mean": 4.0, "drift": 1.2},
+                "accelerometer": {"mean": 5.0, "base_drift": 0.8, "bias_drift": 0.3},
+                "gyroscope": {"mean": 2.2, "base_drift": 0.5, "bias_drift": 0.2},
+                "step_counter": {"mean": 1.8, "base_drift": 0.2},
+                "step_detector": {"mean": 1.0, "base_drift": 0.05},
+                "linear_acceleration": {"mean": 4.0, "base_drift": 1.0},
+                "accelerometer_uncalibrated": {
+                    "mean": 5.0,
+                    "base_drift": 1.2,
+                    "bias_drift": 0.5,
+                },
+                "gyroscope_uncalibrated": {
+                    "mean": 2.0,
+                    "base_drift": 0.6,
+                    "bias_drift": 0.25,
+                },
             },
             "sitting": {
-                "accelerometer": {"mean": 0.1, "drift": 0.05},
-                "gyroscope": {"mean": 0.05, "drift": 0.02},
-                "step_counter": {"mean": 0.0, "drift": 0.0},
-                "step_detector": {"mean": 0.0, "drift": 0.0},
-                "linear_acceleration": {"mean": 0.1, "drift": 0.05},
+                "accelerometer": {"mean": 0.1, "base_drift": 0.02, "bias_drift": 0.01},
+                "gyroscope": {"mean": 0.05, "base_drift": 0.01},
+                "linear_acceleration": {"mean": 0.1, "base_drift": 0.03},
+                "light": {"mean": 300.0, "base_drift": 80.0},
+                "accelerometer_uncalibrated": {
+                    "mean": 0.2,
+                    "base_drift": 0.05,
+                    "bias_drift": 0.03,
+                },
+                "magnetic_field_uncalibrated": {
+                    "mean": 45.0,
+                    "base_drift": 5.0,
+                    "bias_drift": 1.5,
+                },
             },
             "commuting": {
-                "accelerometer": {"mean": 1.0, "drift": 0.5},
-                "gyroscope": {"mean": 0.5, "drift": 0.3},
-                "light": {"mean": 200, "drift": 50},
-                "magnetic_field": {"mean": 40, "drift": 10},
+                "accelerometer": {"mean": 1.5, "base_drift": 0.4, "bias_drift": 0.2},
+                "gyroscope": {"mean": 0.6, "base_drift": 0.2, "bias_drift": 0.1},
+                "magnetic_field": {"mean": 40, "base_drift": 8},
+                "magnetic_field_uncalibrated": {
+                    "mean": 42,
+                    "base_drift": 10,
+                    "bias_drift": 2,
+                },
+                "light": {"mean": 250, "base_drift": 60},
+                "linear_acceleration": {"mean": 1.2, "base_drift": 0.4},
             },
+            "driving": {
+                "accelerometer": {"mean": 1.8, "base_drift": 0.6, "bias_drift": 0.3},
+                "linear_acceleration": {
+                    "mean": 1.5,
+                    "base_drift": 0.5,
+                    "bias_drift": 0.25,
+                },
+                "gyroscope": {"mean": 0.8, "base_drift": 0.4, "bias_drift": 0.2},
+                "gyroscope_uncalibrated": {
+                    "mean": 0.9,
+                    "base_drift": 0.45,
+                    "bias_drift": 0.25,
+                },
+                "magnetic_field": {"mean": 55.0, "base_drift": 10.0},
+                "magnetic_field_uncalibrated": {
+                    "mean": 60.0,
+                    "base_drift": 12.0,
+                    "bias_drift": 3.0,
+                },
+                "light": {"mean": 300.0, "base_drift": 150.0},  # day/night variation
+                "step_counter": {"mean": 0.0, "base_drift": 0.0},
+                "step_detector": {"mean": 0.0, "base_drift": 0.0},
+            },
+        }
+        self.activity_aliases = {
+            "running": ["running", "jogging", "sprinting", "trail running"],
+            "sitting": [
+                "sitting",
+                "resting",
+                "reading",
+                "working on laptop",
+                "typing",
+                "watching tv",
+            ],
+            "commuting": ["bus", "subway", "train", "riding", "on the metro"],
+            "driving": [
+                "driving",
+                "in a car",
+                "in vehicle",
+                "road trip",
+                "stuck in traffic",
+            ],
+            "walking": ["walking", "strolling", "shopping", "browsing"],
+            "sleeping": ["sleeping", "lying down", "napping", "resting in bed"],
         }
 
     def generate(self) -> SensorTrace:
@@ -215,9 +286,6 @@ class SensorTraceGenerator:
         moments = []
         sensors_involved = []
 
-        activity = self.persona.activity_description.lower()
-        traits = self.activity_sensor_map.get(activity, {})
-
         # Define which sensors output different number of values
         uncalibrated_sensors = [
             "accelerometer_uncalibrated",
@@ -226,6 +294,49 @@ class SensorTraceGenerator:
         ]
 
         single_value_sensors = ["light", "step_counter", "step_detector"]
+
+        # --- helper: simulate low-frequency bias (e.g., slow drift or calibration offset)
+
+        def _slow_bias(elapsed: float, bias_amp: float = 0.2):
+            # slow sinusoidal drift + slight random walk
+            return math.sin(elapsed / 20.0) * bias_amp + random.gauss(0, bias_amp / 4)
+
+        def _normalize_activity(self, text: str) -> str:
+            text_lower = text.lower()
+            for canonical, variants in self.activity_aliases.items():
+                if any(alias in text_lower for alias in variants):
+                    return canonical
+            # default fallback
+            return "sitting"
+
+        # --- helper: simulate activity-specific temporal pattern
+        def _activity_modulation(activity: str, elapsed: float) -> float:
+            if activity == "running":
+                # periodic spikes for steps
+                return 1.0 + 0.8 * abs(math.sin(elapsed * 2.5))
+            elif activity == "commuting":
+                # smooth oscillations for vehicle motion
+                return (
+                    1.0 + 0.3 * math.sin(elapsed / 2.5) + 0.15 * math.sin(elapsed / 0.7)
+                )
+            elif activity == "driving":
+                # bursts of acceleration & turns
+                return (
+                    1.0
+                    + 0.3 * math.sin(elapsed / 2.5)
+                    + 0.15 * math.sin(elapsed / 0.7)
+                    + random.gauss(0, 0.05)
+                )
+            elif activity == "sitting":
+                # small body micro-movements
+                return 1.0 + random.gauss(0, 0.01)
+            else:
+                return 1.0 + random.gauss(0, 0.05)
+
+        activity = _normalize_activity(
+            self, text=self.persona.activity_description.lower()
+        )
+        traits = self.activity_sensor_map.get(activity, {})
 
         for i in range(total_frames):
             elapsed = i / self.fps
@@ -236,32 +347,41 @@ class SensorTraceGenerator:
                     continue
                 sensors_involved.append(self.sensor_id_map[sensor])
 
-                mean = stats.get("mean", 0)
-                drift = stats.get("drift", 0.01)
+                mean = stats.get("mean", 0.0)
+                base_drift = stats.get("base_drift", stats.get("drift", 0.05))
+                bias_drift = stats.get("bias_drift", base_drift / 2.0)
 
-                # Generate data based on sensor type
-                if sensor in uncalibrated_sensors:
-                    # 6 values for uncalibrated sensors
-                    data = [
-                        round(random.gauss(mean, drift), 5),
-                        round(random.gauss(mean, drift), 5),
-                        round(random.gauss(mean, drift), 5),
-                        round(random.gauss(0, drift), 5),  # Bias values
-                        round(random.gauss(0, drift), 5),
-                        round(random.gauss(0, drift), 5),
-                    ]
-                elif sensor in single_value_sensors:
-                    # 1 value for light, step_counter, step_detector
-                    data = [round(random.gauss(mean, drift), 5)]
-                else:
-                    # 3 values for standard sensors
-                    data = [
-                        round(random.gauss(mean, drift), 5),
-                        round(random.gauss(mean, drift), 5),
-                        round(random.gauss(mean, drift), 5),
-                    ]
-                # Use numeric sensor ID as key to match mock data format
-                frame_data[str(self.sensor_id_map[sensor])] = data
+                # bias term changes slowly over time
+            bias = _slow_bias(elapsed, bias_amp=bias_drift)
+
+            # short-term variation
+            micro_noise = random.gauss(0, base_drift)
+
+            # motion modulation
+            motion_factor = _activity_modulation(activity, elapsed)
+
+            value = (mean + bias + micro_noise) * motion_factor
+
+            # --- build output per sensor type
+            if sensor in uncalibrated_sensors:
+                data = [
+                    round(value + random.gauss(0, 0.05), 5),
+                    round(value + random.gauss(0, 0.05), 5),
+                    round(value + random.gauss(0, 0.05), 5),
+                    round(bias, 5),  # bias_x
+                    round(bias / 2, 5),  # bias_y
+                    round(bias / 3, 5),  # bias_z
+                ]
+            elif sensor in single_value_sensors:
+                data = [round(value, 5)]
+            else:
+                data = [
+                    round(value + random.gauss(0, 0.05), 5),
+                    round(value + random.gauss(0, 0.05), 5),
+                    round(value + random.gauss(0, 0.05), 5),
+                ]
+
+            frame_data[str(self.sensor_id_map[sensor])] = data
 
             moments.append(SensorMoment(elapsed=elapsed, data=frame_data))
 
@@ -367,6 +487,8 @@ def persona_grader_node(state: GraphState) -> str:
         birth_year = datetime.datetime.strptime(persona.birthday, "%Y-%m-%d").year
         current_year = datetime.datetime.now().year
         derived_age = current_year - birth_year
+        if abs(derived_age - int(persona.age)) > 1:
+            persona.age = f"{derived_age}"
         if abs(derived_age - int(persona.age)) > 1:
             report.append(
                 f"Age mismatch: derived {derived_age} vs stated {persona.age}"
