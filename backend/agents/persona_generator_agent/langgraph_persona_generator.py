@@ -169,10 +169,11 @@ class PersonaGenerator:
 
 
 class SensorTraceGenerator:
-    def __init__(self, persona: PrivacyAttributes, duration_s=20, fps=5):
+    def __init__(self, persona: PrivacyAttributes, duration_s=60, fps=30):
         self.persona = persona
         self.duration_s = duration_s
         self.fps = fps
+        # From Android documentation
         self.sensor_id_map = {
             "accelerometer": 1,
             "magnetic_field": 2,
@@ -185,8 +186,6 @@ class SensorTraceGenerator:
             "step_counter": 19,
             "accelerometer_uncalibrated": 35,
         }
-
-        # Simplified, tuned sensor activity map
         self.activity_sensor_map = {
             "running": {
                 "accelerometer": {"mean": 5.0, "base_drift": 0.8, "bias_drift": 0.3},
@@ -194,34 +193,89 @@ class SensorTraceGenerator:
                 "step_counter": {"mean": 1.8, "base_drift": 0.2},
                 "step_detector": {"mean": 1.0, "base_drift": 0.05},
                 "linear_acceleration": {"mean": 4.0, "base_drift": 1.0},
+                "accelerometer_uncalibrated": {
+                    "mean": 5.0,
+                    "base_drift": 1.2,
+                    "bias_drift": 0.5,
+                },
+                "gyroscope_uncalibrated": {
+                    "mean": 2.0,
+                    "base_drift": 0.6,
+                    "bias_drift": 0.25,
+                },
             },
             "sitting": {
-                "accelerometer": {"mean": 0.1, "base_drift": 0.02},
+                "accelerometer": {"mean": 0.1, "base_drift": 0.02, "bias_drift": 0.01},
                 "gyroscope": {"mean": 0.05, "base_drift": 0.01},
-                "light": {"mean": 300.0, "base_drift": 80.0},
                 "linear_acceleration": {"mean": 0.1, "base_drift": 0.03},
+                "light": {"mean": 300.0, "base_drift": 80.0},
+                "accelerometer_uncalibrated": {
+                    "mean": 0.2,
+                    "base_drift": 0.05,
+                    "bias_drift": 0.03,
+                },
+                "magnetic_field_uncalibrated": {
+                    "mean": 45.0,
+                    "base_drift": 5.0,
+                    "bias_drift": 1.5,
+                },
             },
             "commuting": {
-                "accelerometer": {"mean": 1.5, "base_drift": 0.4},
-                "gyroscope": {"mean": 0.6, "base_drift": 0.2},
+                "accelerometer": {"mean": 1.5, "base_drift": 0.4, "bias_drift": 0.2},
+                "gyroscope": {"mean": 0.6, "base_drift": 0.2, "bias_drift": 0.1},
                 "magnetic_field": {"mean": 40, "base_drift": 8},
+                "magnetic_field_uncalibrated": {
+                    "mean": 42,
+                    "base_drift": 10,
+                    "bias_drift": 2,
+                },
                 "light": {"mean": 250, "base_drift": 60},
+                "linear_acceleration": {"mean": 1.2, "base_drift": 0.4},
             },
             "driving": {
-                "accelerometer": {"mean": 1.8, "base_drift": 0.6},
-                "linear_acceleration": {"mean": 1.5, "base_drift": 0.5},
-                "gyroscope": {"mean": 0.8, "base_drift": 0.4},
+                "accelerometer": {"mean": 1.8, "base_drift": 0.6, "bias_drift": 0.3},
+                "linear_acceleration": {
+                    "mean": 1.5,
+                    "base_drift": 0.5,
+                    "bias_drift": 0.25,
+                },
+                "gyroscope": {"mean": 0.8, "base_drift": 0.4, "bias_drift": 0.2},
+                "gyroscope_uncalibrated": {
+                    "mean": 0.9,
+                    "base_drift": 0.45,
+                    "bias_drift": 0.25,
+                },
                 "magnetic_field": {"mean": 55.0, "base_drift": 10.0},
-                "light": {"mean": 300.0, "base_drift": 150.0},
+                "magnetic_field_uncalibrated": {
+                    "mean": 60.0,
+                    "base_drift": 12.0,
+                    "bias_drift": 3.0,
+                },
+                "light": {"mean": 300.0, "base_drift": 150.0},  # day/night variation
+                "step_counter": {"mean": 0.0, "base_drift": 0.0},
+                "step_detector": {"mean": 0.0, "base_drift": 0.0},
             },
         }
-
         self.activity_aliases = {
-            "running": ["running", "jogging", "sprinting"],
-            "sitting": ["sitting", "resting", "reading", "working"],
-            "commuting": ["bus", "train", "metro", "subway"],
-            "driving": ["driving", "road trip", "in car"],
-            "walking": ["walking", "strolling", "shopping"],
+            "running": ["running", "jogging", "sprinting", "trail running"],
+            "sitting": [
+                "sitting",
+                "resting",
+                "reading",
+                "working on laptop",
+                "typing",
+                "watching tv",
+            ],
+            "commuting": ["bus", "subway", "train", "riding", "on the metro"],
+            "driving": [
+                "driving",
+                "in a car",
+                "in vehicle",
+                "road trip",
+                "stuck in traffic",
+            ],
+            "walking": ["walking", "strolling", "shopping", "browsing"],
+            "sleeping": ["sleeping", "lying down", "napping", "resting in bed"],
         }
 
     def _normalize_activity(self, text: str) -> str:
@@ -268,9 +322,6 @@ class SensorTraceGenerator:
             for sensor, stats in traits.items():
                 if sensor not in self.sensor_id_map:
                     continue
-                if sensor in ["light", "magnetic_field"] and random.random() < 0.5:
-                    continue  # skip this sensor half the time
-
                 sensors_used.append(self.sensor_id_map[sensor])
                 mean = stats.get("mean", 0.0)
                 base_drift = stats.get("base_drift", 0.05)
@@ -290,7 +341,7 @@ class SensorTraceGenerator:
                         round(bias / 3, 3),
                     ]
                 elif sensor in single_val:
-                    data = [round(value, 2)]
+                    data = [round(value, 3)]
                 else:
                     data = [
                         round(value + random.gauss(0, 0.05), 3),
@@ -300,9 +351,7 @@ class SensorTraceGenerator:
 
                 frame_data[str(self.sensor_id_map[sensor])] = data
 
-            # downsample in real time (reduce memory & lines)
-            if i % 2 == 0:  # keep every 2nd frame
-                moments.append(SensorMoment(elapsed=elapsed, data=frame_data))
+            moments.append(SensorMoment(elapsed=elapsed, data=frame_data))
 
         return SensorTrace(
             id=id_str,
@@ -504,7 +553,7 @@ def grade_traces_node(state: GraphState) -> Dict[str, Any]:
         "Example A (clearly fake): accelerometer values all near 0, no variation → score: 1.\n"
         "Example B (moderate realism): accelerometer fluctuates smoothly 0–2, gyroscope small periodic drift → score: 6.\n"
         "Example C (very realistic): complex correlated motion with noise, GPS path continuous → score: 9.\n\n"
-        # "Be objective but not cynical; many good synthetic traces should earn 6–8.\n"
+        "Be objective but not cynical; many good synthetic traces should earn 6–8.\n"
         "Output only a single integer 0–10.\n\n"
         f"Persona summary: {getattr(persona, 'first_name', '')} {getattr(persona, 'last_name', '')}, "
         f"activity={getattr(persona, 'activity_description', '')}, job={getattr(persona, 'job', '')}, "
@@ -513,8 +562,6 @@ def grade_traces_node(state: GraphState) -> Dict[str, Any]:
         f"GPS snippet: {getattr(traces.get('draw_trace'), 'points', [])[:3]}\n"
     )
 
-    # llm_trace_grader = ChatOpenAI(model="gpt-5-mini-2025-08-07")
-    # response = llm_trace_grader.invoke(grader_prompt)
     response = llm_model.invoke(grader_prompt)
     text = response.content.strip()
     try:
