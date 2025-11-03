@@ -553,17 +553,26 @@ def grade_traces_node(state: GraphState) -> Dict[str, Any]:
 
     grader_prompt = (
         "You are a motion-data realism evaluator. "
-        "Rate the believability of the following synthetic traces on a 0–10 scale:\n"
-        "0 = completely fake, 5 = somewhat plausible, 10 = indistinguishable from real. "
-        "Be very strict; only realistic and consistent traces score above 7.\n\n"
+        "Your job is to rate the believability of synthetic mobile sensor traces on a 0–10 scale.\n\n"
+        "Interpret the scale as follows:\n"
+        "  0–2 : Completely unrealistic, random or constant values.\n"
+        "  3–5 : Somewhat plausible, noisy but inconsistent with real movement.\n"
+        "  6–8 : Generally realistic with coherent temporal variation.\n"
+        "  9–10: Indistinguishable from genuine human sensor data.\n\n"
+        "Example A (clearly fake): accelerometer values all near 0, no variation → score: 1.\n"
+        "Example B (moderate realism): accelerometer fluctuates smoothly 0–2, gyroscope small periodic drift → score: 6.\n"
+        "Example C (very realistic): complex correlated motion with noise, GPS path continuous → score: 9.\n\n"
+        # "Be objective but not cynical; many good synthetic traces should earn 6–8.\n"
+        "Output only a single integer 0–10.\n\n"
         f"Persona summary: {getattr(persona, 'first_name', '')} {getattr(persona, 'last_name', '')}, "
         f"activity={getattr(persona, 'activity_description', '')}, job={getattr(persona, 'job', '')}, "
         f"city={getattr(persona, 'city', '')}\n\n"
         f"Sensor snippet: {getattr(traces.get('sensor_trace'), 'moments', [])[:3]}\n"
-        f"GPS snippet: {getattr(traces.get('draw_trace'), 'points', [])[:3]}\n\n"
-        "Reply ONLY with a single integer score from 0–10."
+        f"GPS snippet: {getattr(traces.get('draw_trace'), 'points', [])[:3]}\n"
     )
 
+    # llm_trace_grader = ChatOpenAI(model="gpt-5-mini-2025-08-07")
+    # response = llm_trace_grader.invoke(grader_prompt)
     response = llm_model.invoke(grader_prompt)
     text = response.content.strip()
     try:
