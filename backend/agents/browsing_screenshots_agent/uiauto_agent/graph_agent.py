@@ -1,4 +1,13 @@
-# uiauto_agent/graph_agent.py
+# --- local debug shim (only affects this file) ---
+if __name__ == "__main__":
+    import sys, os
+
+    sys.path.append(
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
+    )
+# -------------------------------------------------
+
+
 import json
 import os
 from typing import TypedDict, List, Dict, Any, Literal
@@ -7,13 +16,25 @@ from langgraph.graph import StateGraph, END
 from backend.agents.persona_generator_agent.langgraph_persona_generator import (
     PrivacyAttributes,
 )
-from .device import connect, press, stop_app, get_installed_apps
-from . import llm_planner
-from . import actions_spotify as SP
-from . import actions_facebook as FB
-from . import actions_tiktok as TK
-from . import actions_camera as CAM
-from .selectors import PKG_SPOTIFY, PKG_FB, PKG_TIKTOK, PKG_CAMERA
+from backend.agents.browsing_screenshots_agent.uiauto_agent.device import (
+    connect,
+    press,
+    stop_app,
+    get_installed_apps,
+)
+from backend.agents.browsing_screenshots_agent.uiauto_agent import (
+    llm_planner,
+    actions_spotify as SP,
+    actions_facebook as FB,
+    actions_tiktok as TK,
+    actions_camera as CAM,
+)
+from backend.agents.browsing_screenshots_agent.uiauto_agent.selectors import (
+    PKG_SPOTIFY,
+    PKG_FB,
+    PKG_TIKTOK,
+    PKG_CAMERA,
+)
 
 
 # 1. Define the State for our graph

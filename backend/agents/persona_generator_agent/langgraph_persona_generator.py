@@ -7,7 +7,6 @@ import time
 from typing import Any, Dict, List, Optional, TypedDict, Union
 from uu import Error
 import uuid
-from xxlimited import Null
 
 from dotenv import load_dotenv
 from geopy.geocoders import Nominatim
@@ -16,7 +15,9 @@ from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, BaseMessage
 
-from persona_generation_prompt import system_message
+# from persona_generation_prompt import system_message
+
+from .persona_generation_prompt import system_message
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 
