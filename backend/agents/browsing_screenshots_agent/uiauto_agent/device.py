@@ -117,13 +117,16 @@ def robust_click(d, tries=3, **sel) -> bool:
 
 
 def press(d, key: str = "back"):
-    # "back" | "home" | "recent"
-    getattr(d, key)()
+    """Press a system key: 'home', 'back', or 'recent'."""
+    try:
+        d.press(key)
+    except Exception as e:
+        print(f"⚠️ Failed to press {key}: {e}")
 
 
 def start_app(d, pkg: str):
     d.app_start(pkg)
-    d.wait_activity(timeout=10)
+    d.wait_activity(pkg, timeout=10)
 
 
 def stop_app(d, pkg: str):
