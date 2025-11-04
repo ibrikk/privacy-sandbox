@@ -2,11 +2,12 @@
 from .device import start_app, robust_click, set_text, dismiss_overlays
 from .selectors import PKG_SPOTIFY, SPOTIFY
 
+
 # Simple mapping from persona traits → query
 def _playlist_query(persona) -> str:
     act = (persona.activity_description or "").lower()
     city = (persona.city or "").lower()
-    age  = str(persona.age)
+    age = persona.age
 
     if "commut" in act:
         return "Spotify Commute Mix"
@@ -21,6 +22,7 @@ def _playlist_query(persona) -> str:
     if age.isdigit() and int(age) < 25:
         return "Top 50 Global"
     return "Chill mix"
+
 
 def play_for_persona(d, persona):
     start_app(d, PKG_SPOTIFY)

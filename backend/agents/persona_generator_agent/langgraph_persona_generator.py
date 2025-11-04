@@ -595,6 +595,15 @@ def save_package_node(state: GraphState) -> Dict[str, Any]:
     export_root = f"{attrs.first_name}_{attrs.last_name}_export"
     os.makedirs(export_root, exist_ok=True)
 
+    # --- Save standalone persona.json (do NOT include in tar) ---
+    persona_path = os.path.join(export_root, "persona.json")
+    try:
+        with open(persona_path, "w") as pf:
+            json.dump(attrs.model_dump(), pf, indent=2)
+        print(f"🧍 Persona JSON saved (not included in tar): {persona_path}")
+    except Exception as e:
+        print(f"⚠️ Failed to save persona.json: {e}")
+
     # 1️⃣ Motion file (sensor data)
     sensor_trace = traces.get("sensor_trace")
     if sensor_trace:
@@ -634,19 +643,25 @@ def save_package_node(state: GraphState) -> Dict[str, Any]:
         ) as f:
             json.dump(record_json, f, indent=2)
 
-    # 4️⃣ Tar everything (flat, no folders)
+    # 4️⃣ Tar everything EXCEPT persona.json
     tar_path = f"{export_root}.tar.gz"
     import tarfile
 
     with tarfile.open(tar_path, "w:gz") as tar:
         for filename in os.listdir(export_root):
+            # skip persona.json (explicit)
+            if filename == "persona.json":
+                continue
+            # optionally skip hidden files
+            if filename.startswith("."):
+                continue
             tar.add(os.path.join(export_root, filename), arcname=filename)
 
     print(f"✅ Motion Emulator bundle ready: {tar_path}")
-    print("📂 Contents:")
+    print("📂 Tar Contents:")
     os.system(f"tar -tzf {tar_path}")
 
-    return {"save_dir": export_root, "tar_path": tar_path}
+    return {"save_dir": export_root, "tar_path": tar_path, "persona_path": persona_path}
 
 
 # ----- Wire the graph -----
@@ -690,8 +705,8 @@ if __name__ == "__main__":
     prompt = "Sarah, software engineer in San Francisco, jogging in Golden Gate Park."
     app.invoke({"prompt": prompt})
 
-    prompt_2 = (
-        "John who is a writer. "
-        "He is currently sitting in a cafe in New York City, working on his laptop."
-    )
-    app.invoke({"prompt": prompt_2})
+    # prompt_2 = (
+    #     "John who is a writer. "
+    #     "He is currently sitting in a cafe in New York City, working on his laptop."
+    # )
+    # app.invoke({"prompt": prompt_2})

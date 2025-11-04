@@ -2,6 +2,7 @@
 from .device import start_app, robust_click, set_text, dismiss_overlays, press
 from .selectors import PKG_FB, FACEBOOK
 
+
 def _status_for_persona(persona) -> str:
     act = (persona.activity_description or "browsing").lower()
     city = persona.city or ""
@@ -9,10 +10,12 @@ def _status_for_persona(persona) -> str:
     msg = f"Morning {act} in {city} {mood}".strip()
     return msg
 
+
 def open_and_browse(d):
     start_app(d, PKG_FB)
     dismiss_overlays(d)
     robust_click(d, **FACEBOOK["home_tab"])
+
 
 def search_topic(d, topic: str):
     # Go to search and query
@@ -20,6 +23,7 @@ def search_topic(d, topic: str):
         robust_click(d, text="Search")
     set_text(d, topic, **FACEBOOK["search_edit"])
     d.press("enter")
+
 
 def maybe_post_status(d, persona):
     """
