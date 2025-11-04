@@ -130,6 +130,17 @@ def stop_app(d, pkg: str):
     d.app_stop(pkg)
 
 
-def get_installed_apps(d) -> list[str]:
-    """Returns a list of installed third-party packages."""
-    return d.app_list(third_only=True)
+def get_installed_apps(d):
+    """
+    Returns list of installed apps (third-party only).
+    Falls back gracefully if filter not supported.
+    """
+    try:
+        # '-3' means third-party apps
+        return d.app_list("-3")
+    except Exception as e:
+        print(f"⚠️ app_list('-3') failed ({e}); falling back to all apps.")
+        try:
+            return d.app_list()  # all packages
+        except Exception:
+            return []
