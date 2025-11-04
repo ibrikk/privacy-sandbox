@@ -21,11 +21,54 @@ COMMON_DISMISS_SELECTORS = [
 ]
 
 
-def connect(serial: str | None = None):
+import uiautomator2 as u2
+import threading, time
+
+
+def connect(
+    serial: str | None = None,
+    implicit_wait: float = 6.0,
+    heartbeat_sec: int | None = 120,
+):
     d = u2.connect(serial) if serial else u2.connect()
-    d.set_fastinput_ime(True)
-    d.set_new_command_timeout(300)
-    d.implicitly_wait(6.0)
+
+    # Ensure the UIA service is up
+    try:
+        d.healthcheck()  # starts uiautomator if needed
+    except Exception:
+        pass
+
+    # Fast input IME (auto-installs if missing on recent u2)
+    try:
+        d.set_fastinput_ime(True)
+    except Exception:
+        pass  # not fatal on some ROMs
+
+    # Global implicit wait for selectors
+    try:
+        d.implicitly_wait(implicit_wait)
+    except Exception:
+        pass
+    # Older u2 versions expose wait_timeout as a property
+    if hasattr(d, "wait_timeout"):
+        try:
+            d.wait_timeout = implicit_wait
+        except Exception:
+            pass
+
+    # Optional heartbeat to prevent idle disconnects (u2 has no newCommandTimeout)
+    if heartbeat_sec and heartbeat_sec > 0:
+
+        def _hb(dev):
+            while True:
+                try:
+                    _ = dev.info  # cheap ping
+                except Exception:
+                    pass
+                time.sleep(heartbeat_sec)
+
+        threading.Thread(target=_hb, args=(d,), daemon=True).start()
+
     return d
 
 
