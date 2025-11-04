@@ -9,3 +9,6 @@ beautifulsoup4
 langchain_text_splitters
 fastapi
 geopy
+uiautomator2
+pillow
+
