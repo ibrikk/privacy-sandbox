@@ -249,7 +249,7 @@ def run_persona_session(
 
 # --- main entrypoint (runs after definitions) ---
 if __name__ == "__main__":
-    persona_path = "./Sarah_Lee_export/persona.json"  # adjust path
+    persona_path = "Sarah_Lee_export/persona.json"  # adjust path
     serial = None  # or device serial
     print("🚀 Starting persona-driven UI automation session...")
     run_persona_session(persona_json_path=persona_path, serial=serial, max_steps=5)
