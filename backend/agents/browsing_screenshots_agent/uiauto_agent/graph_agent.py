@@ -5,6 +5,8 @@ if __name__ == "__main__":
     sys.path.append(
         os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
     )
+
+
 # -------------------------------------------------
 
 
@@ -243,3 +245,12 @@ def run_persona_session(
             # Print a summary of the final state without the device object
             summary = {k: v for k, v in final_state.items() if k != "d"}
             print(json.dumps(summary, indent=2, default=str))
+
+
+# --- main entrypoint (runs after definitions) ---
+if __name__ == "__main__":
+    persona_path = "./Sarah_Lee_export/persona.json"  # adjust path
+    serial = None  # or device serial
+    print("🚀 Starting persona-driven UI automation session...")
+    run_persona_session(persona_json_path=persona_path, serial=serial, max_steps=5)
+# -------------------------------------------------
