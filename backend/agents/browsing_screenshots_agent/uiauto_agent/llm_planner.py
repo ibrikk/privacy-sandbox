@@ -12,7 +12,6 @@ from .planner import build_action_plan
 # llm = ChatOpenAI(model="gpt-5-mini-2025-08-07")
 
 
-# Improve available_actions
 def _build_prompt(persona, installed_apps, history, available_actions) -> str:
     persona_details = json.dumps(persona.__dict__, indent=2)
     return f"""
@@ -59,6 +58,9 @@ def _call_llm(prompt: str) -> str:
     print("------------------")
 
     groq_api_key = os.getenv("GROQ_API_KEY")
+
+    # llm_model = ChatOpenAI(model="gpt-5-mini-2025-08-07")
+
     llm_model = ChatGroq(model="llama-3.3-70b-versatile", groq_api_key=groq_api_key)
     # Uncomment below for real LLM reasoning (OpenAI example):
     response = llm_model.invoke(prompt)
@@ -78,12 +80,11 @@ def get_next_action(
     Prevents repetitive app use and adds diversity to persona behavior.
     """
     prompt = _build_prompt(persona, installed_apps, history, available_actions)
-    # Improve _cal_llm()
     llm_response = json.loads(_call_llm(prompt))
     thought = llm_response.get("thought", "")
 
     # 1️⃣ Generate a base action plan
-    # Improve planning
+    # TODO: Improve planning -- low priority
     base_plan = build_action_plan(persona)
 
     # 2️⃣ Prevent repetition (no more than twice in a row)
