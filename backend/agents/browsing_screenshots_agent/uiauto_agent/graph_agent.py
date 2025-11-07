@@ -31,7 +31,10 @@ from backend.agents.browsing_screenshots_agent.uiauto_agent import (
     actions_facebook as FB,
     actions_tiktok as TK,
     actions_camera as CAM,
+    # actions_instagram as IG,
+    # actions_weather as WTH,
 )
+
 from backend.agents.browsing_screenshots_agent.uiauto_agent.selectors import (
     PKG_SPOTIFY,
     PKG_FB,
@@ -61,6 +64,10 @@ DISPATCH = {
     ("facebook", "maybe_post_status"): FB.maybe_post_status,
     ("tiktok", "watch_and_scroll"): TK.watch_and_scroll,
     ("camera", "take_selfie"): CAM.take_selfie,
+    # ("instagram", "browse_feed"): IG.browse_feed,
+    # ("instagram", "view_stories"): IG.view_stories,
+    # ("instagram", "search_interest"): IG.search_interest,
+    # ("weather", "check_weather"): WTH.check_weather,
 }
 
 # 2. Define the Nodes for our graph
@@ -112,6 +119,7 @@ def execute_step(state: AgentState) -> dict:
     try:
         print(f"▶️  Executing: {key} | args={args}")
         # Pass persona only if the function expects it
+        # TODO: check what this does
         if "persona" in fn.__code__.co_varnames:
             fn(d=state["d"], persona=state["persona"], **args)
         else:

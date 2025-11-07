@@ -1,5 +1,10 @@
+import os
 from typing import List, Dict, Any
 import json, random
+
+from langchain_groq import ChatGroq
+
+from backend.agents.persona_generator_agent.langgraph_persona_generator import llm_model
 from .planner import build_action_plan
 
 # Optional: if you want real LLM reasoning (currently simulated)
@@ -7,6 +12,7 @@ from .planner import build_action_plan
 # llm = ChatOpenAI(model="gpt-5-mini-2025-08-07")
 
 
+# Improve available_actions
 def _build_prompt(persona, installed_apps, history, available_actions) -> str:
     persona_details = json.dumps(persona.__dict__, indent=2)
     return f"""
@@ -52,11 +58,12 @@ def _call_llm(prompt: str) -> str:
     print(prompt)
     print("------------------")
 
+    groq_api_key = os.getenv("GROQ_API_KEY")
+    llm_model = ChatGroq(model="llama-3.3-70b-versatile", groq_api_key=groq_api_key)
     # Uncomment below for real LLM reasoning (OpenAI example):
-    # response = llm.invoke(prompt)
-    # thought = response.content.strip()
+    response = llm_model.invoke(prompt)
+    thought = response.content.strip()
 
-    thought = "Simulated reasoning: switching apps for variety and realistic behavior."
     return json.dumps({"thought": thought, "action": {}})
 
 
@@ -71,10 +78,12 @@ def get_next_action(
     Prevents repetitive app use and adds diversity to persona behavior.
     """
     prompt = _build_prompt(persona, installed_apps, history, available_actions)
+    # Improve _cal_llm()
     llm_response = json.loads(_call_llm(prompt))
     thought = llm_response.get("thought", "")
 
     # 1️⃣ Generate a base action plan
+    # Improve planning
     base_plan = build_action_plan(persona)
 
     # 2️⃣ Prevent repetition (no more than twice in a row)
@@ -87,6 +96,7 @@ def get_next_action(
         candidate_actions = base_plan
 
     # 4️⃣ Prefer apps that exist on the device
+    # TODO: Make sure this works right
     valid_candidates = [
         a
         for a in candidate_actions
