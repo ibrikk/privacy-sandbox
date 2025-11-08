@@ -124,9 +124,19 @@ def press(d, key: str = "back"):
         print(f"⚠️ Failed to press {key}: {e}")
 
 
-def start_app(d, pkg: str):
+def start_app(d, pkg: str, timeout: int = 10):
+    """Starts an app and waits for it to be in the foreground."""
     d.app_start(pkg)
-    d.wait_activity(pkg, timeout=10)
+    try:
+        d.wait_activity(pkg, timeout=timeout)
+        current_app = d.app_current()
+        if current_app['package'] != pkg:
+            print(f"⚠️ App {pkg} did not come to foreground. Current app: {current_app['package']}")
+            # Fallback to a simple wait
+            time.sleep(timeout / 2)
+    except Exception as e:
+        print(f"⚠️ Timed out waiting for app {pkg} to start: {e}")
+        time.sleep(timeout / 2) # Give it a moment to settle anyway
 
 
 def stop_app(d, pkg: str):
