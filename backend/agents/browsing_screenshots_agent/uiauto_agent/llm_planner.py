@@ -1,13 +1,22 @@
 import os
-from typing import List, Dict, Any
+from typing import List, Dict, Any, cast
 import json, random
 
+from langchain_core.prompts import ChatPromptTemplate
 from langchain_groq import ChatGroq
+from pydantic import BaseModel, SecretStr
+from langchain_core.output_parsers import PydanticOutputParser
 
-from backend.agents.persona_generator_agent.langgraph_persona_generator import (
-    PrivacyAttributes,
-)
 from .planner import build_action_plan
+
+class Action(BaseModel):
+    app: str
+    intent: str
+    args: Dict[str, Any]
+
+class ThoughtAction(BaseModel):
+    thought: str
+    action: Action
 
 # Optional: if you want real LLM reasoning (currently simulated)
 # from langchain_openai import ChatOpenAI
@@ -51,7 +60,7 @@ Return valid JSON:
 """.strip()
 
 
-def _call_llm(prompt: str) -> str:
+def _call_llm(prompt: str) -> ThoughtAction:
     """
     Placeholder for LLM call — replace with real API if desired.
     """
@@ -59,16 +68,39 @@ def _call_llm(prompt: str) -> str:
     print(prompt)
     print("------------------")
 
-    groq_api_key = os.getenv("GROQ_API_KEY")
+    groq_api_key = os.getenv("GROQ_API_KEY") or ""
 
     # llm_model = ChatOpenAI(model="gpt-5-mini-2025-08-07")
 
-    llm_model = ChatGroq(model="llama-3.3-70b-versatile", groq_api_key=groq_api_key)
-    # Uncomment below for real LLM reasoning (OpenAI example):
-    response = llm_model.invoke(prompt)
-    thought = response.content.strip()
+    llm_model = ChatGroq(model="llama-3.3-70b-versatile", api_key=SecretStr(groq_api_key))
 
-    return json.dumps({"thought": thought, "action": {}})
+    # LangChain output parser for your Pydantic model
+    parser = PydanticOutputParser(pydantic_object=ThoughtAction)
+
+    # Define the prompt template
+    prompt_template = ChatPromptTemplate.from_template(
+        "You are a reasoning model. "
+        "Given the user input, produce a structured ThoughtAction object.\n\n"
+        "{format_instructions}\n\n"
+        "User input:\n{user_input}"
+    )
+
+    formatted_prompt = prompt_template.format(
+    format_instructions=parser.get_format_instructions(),
+    user_input=prompt
+    )
+    
+    response = llm_model.invoke(formatted_prompt)
+
+    try:
+        result = parser.parse(cast(str, response.content))
+        return result
+    except Exception as e:
+        print("⚠️ Failed to parse LLM output:", e)
+        print("Raw output:", response.content)
+        raise
+
+    # return json.dumps({"thought": thought, "action": {}})
 
 
 def get_next_action(
@@ -82,12 +114,11 @@ def get_next_action(
     Prevents repetitive app use and adds diversity to persona behavior.
     """
     prompt = _build_prompt(persona, installed_apps, history, available_actions)
-    llm_response = json.loads(_call_llm(prompt))
-    thought = llm_response.get("thought", "")
+    llm_response: ThoughtAction = _call_llm(prompt)
 
     # 1️⃣ Generate a base action plan
     # TODO: Improve planning -- low priority
-    base_plan = build_action_plan(thought, persona)
+    base_plan = build_action_plan(llm_response.thought, persona)
 
     # 2️⃣ Prevent repetition (no more than twice in a row)
     recent_apps = [h["action"]["app"] for h in history[-3:] if "action" in h]

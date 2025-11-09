@@ -13,6 +13,9 @@ def build_action_plan(thought: str, persona: PrivacyAttributes) -> List[Dict[str
     """
 
     plan: List[Dict[str, Any]] = []
+    
+    thought = 'I just finished jogging in Golden Gate Park and I\'m feeling energized. Now, I want to listen to some music to unwind. \n\n{\n"thought": "Time to relax with some tunes after my jog",\n"action": {"app": "com.spotify.music", "action": "play_for_persona", "args": {}}\n}'
+    
 
     # --- Extract key traits ---
     act = (persona.activity_description or "").lower()
@@ -20,7 +23,7 @@ def build_action_plan(thought: str, persona: PrivacyAttributes) -> List[Dict[str
     job = (persona.job or "").lower()
     income_type = (persona.income_type or "").lower()
     city = (persona.city or "their city").title()
-    age = int(persona.age) if str(persona.age).isdigit() else 30
+    age = int(persona.age) 
 
     # --- Helper: probabilistic append ---
     def maybe(p: float, app: str, action: str, **args):
