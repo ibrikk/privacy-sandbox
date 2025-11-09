@@ -12,20 +12,20 @@ if __name__ == "__main__":
 
 import json
 import os
-from typing import TypedDict, List, Dict, Any, Literal
+from typing import Callable, Tuple, TypedDict, List, Dict, Any, Literal, cast
 from langgraph.graph import StateGraph, END
 
 
-from backend.agents.persona_generator_agent.langgraph_persona_generator import (
+from backend.agents.persona_generator_agent.langgraph_persona_generator import (  # pyright: ignore[reportMissingImports]
     PrivacyAttributes,
 )
-from backend.agents.browsing_screenshots_agent.uiauto_agent.device import (
+from backend.agents.browsing_screenshots_agent.uiauto_agent.device import (  # pyright: ignore[reportMissingImports]
     connect,
     press,
     stop_app,
     get_installed_apps,
 )
-from backend.agents.browsing_screenshots_agent.uiauto_agent import (
+from backend.agents.browsing_screenshots_agent.uiauto_agent import (  # pyright: ignore[reportMissingImports]
     llm_planner,
     actions_spotify as SP,
     actions_facebook as FB,
@@ -35,7 +35,7 @@ from backend.agents.browsing_screenshots_agent.uiauto_agent import (
     # actions_weather as WTH,
 )
 
-from backend.agents.browsing_screenshots_agent.uiauto_agent.selectors import (
+from backend.agents.browsing_screenshots_agent.uiauto_agent.selectors import (  # pyright: ignore[reportMissingImports]
     PKG_SPOTIFY,
     PKG_FB,
     PKG_TIKTOK,
@@ -57,7 +57,7 @@ class AgentState(TypedDict):
 
 
 # The same dispatch table from the previous agent
-DISPATCH = {
+DISPATCH: Dict[Tuple[str, str], Callable] = {
     ("spotify", "play_for_persona"): SP.play_for_persona,
     ("facebook", "open_and_browse"): FB.open_and_browse,
     ("facebook", "search_topic"): FB.search_topic,
@@ -95,7 +95,7 @@ def execute_step(state: AgentState) -> dict:
     """Executes the action planned by the LLM."""
     step = state["current_action"]
     app, action_name = step.get("app"), step.get("action")
-    key = (app, action_name)
+    key: Tuple[str, str] = cast(Tuple[str, str], (app, action_name))
 
     fn = DISPATCH.get(key)
     if not fn:
@@ -141,7 +141,7 @@ def execute_step(state: AgentState) -> dict:
 
 
 # 3. Define the Conditional Edge
-def should_continue(state: AgentState) -> Literal["execute_step", END]:
+def should_continue(state: AgentState):
     """Determines whether to continue the loop or end the session."""
     if state["steps_taken"] >= state["max_steps"]:
         print("🏁 Reached max steps. Ending session.")

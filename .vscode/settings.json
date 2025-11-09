@@ -1,11 +1,8 @@
 {
-    "python.defaultInterpreterPath": "${workspaceFolder}/backend/.venv/bin/python",
-    "python.analysis.extraPaths": [
-        "${workspaceFolder}/backend"
-    ],
-    "python.analysis.autoImportCompletions": true,
-    "python.analysis.typeCheckingMode": "basic",
-    "python.analysis.diagnosticMode": "workspace",
-    "python.analysis.useLibraryCodeForTypes": true
+  "python.defaultInterpreterPath": "/Users/ibrahimkhalilov/Documents/privacy-sandbox/backend/.sandbox-venv/bin/python",
+  "python.languageServer": "Pylance",
+  "python.analysis.extraPaths": [
+    "/Users/ibrahimkhalilov/Documents/privacy-sandbox/backend/.sandbox-venv/lib/python3.12/site-packages"
+  ],
+  "python.terminal.activateEnvironment": true
 }
-

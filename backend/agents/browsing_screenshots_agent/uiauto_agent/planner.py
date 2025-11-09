@@ -1,8 +1,9 @@
+
 # uiauto_agent/planner.py
 import random
 from typing import List, Dict, Any
 
-from backend.persona_generator import PrivacyAttributes
+from backend.agents.persona_generator_agent.langgraph_persona_generator import PrivacyAttributes   # pyright: ignore[reportMissingImports]
 
 
 def build_action_plan(thought: str, persona: PrivacyAttributes) -> List[Dict[str, Any]]:

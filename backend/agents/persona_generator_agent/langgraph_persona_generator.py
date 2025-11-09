@@ -4,20 +4,48 @@ import math
 import os
 import random
 import time
-from typing import Any, Dict, List, Optional, TypedDict, Union
-from uu import Error
+from typing import Any, Dict, List, Optional, TypedDict, Union, cast
 import uuid
 
 from dotenv import load_dotenv
+from geopy import Location
 from geopy.geocoders import Nominatim
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, BaseMessage
 
-# from persona_generation_prompt import system_message
+system_message = (
+    "You are a privacy and behavior modeling expert generating lifelike human personas for mobile privacy simulations. "
+    "Each persona should be realistic, contextually grounded, and internally consistent across demographics, occupation, "
+    "lifestyle, and daily activity.\n\n"
+    "### Your reasoning steps (to yourself before output)\n"
+    "1. Read the user prompt carefully to understand who the person is and what they're doing.\n"
+    "2. Infer missing realistic details (e.g., if a 28-year-old woman is 'running in Golden Gate Park', she probably works in tech, lives near San Francisco, and earns a mid-to-high salary).\n"
+    "3. Make sure demographic, income, and lifestyle attributes align logically with each other. And age matches the birthday\n"
+    "4. Ensure diversity, neutrality, and privacy-awareness — avoid bias or stereotypes.\n"
+    "5. Finally, output a complete and clean PrivacyAttributes object, with all required fields filled.\n\n"
+    "### Example 1 (for inspiration)\n"
+    "Prompt: 'A 30-year-old man named David commuting to work in Seattle.'\n"
+    "→ Persona: David Chen, age 30, male, Asian, lives in Seattle, WA. Bachelor's in Computer Engineering. "
+    "Software developer at Amazon, income $125,000/year, single, renter in downtown. "
+    "Online behavior: reads Reddit tech forums, moderate app usage, privacy-conscious. "
+    "Activity: 'commuting on the light rail while browsing phone notifications.'\n\n"
+    "### Example 2\n"
+    "Prompt: 'A 42-year-old woman named Alicia having coffee before work in Chicago.'\n"
+    "→ Persona: Alicia Torres, age 42, female, Hispanic, lives in Chicago, IL. MBA, marketing director at a healthcare firm, "
+    "income $145,000/year, married with grade-school children, homeowner in Oak Park. "
+    "Online behavior: uses LinkedIn and Facebook daily, privacy-indifferent. "
+    "Activity: 'sitting at a cafe checking emails.'\n\n"
+    "### Output rules\n"
+    "- Always respond with a structured PrivacyAttributes object.\n"
+    "- Do NOT include reasoning or intermediate text.\n"
+    "- Do NOT mention sensors or devices — only human and contextual fields.\n"
+    "- Use realistic, diverse, non-stereotypical details.\n"
+    "- Output must be consistent and human-like, suitable for downstream sensor spoofing simulation."
+)
 
-from .persona_generation_prompt import system_message
+
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 
@@ -26,14 +54,14 @@ from langchain_core.prompts import ChatPromptTemplate
 load_dotenv()
 
 # Langsmith Tracking
-os.environ["LANGCHAIN_API_KEY"] = os.getenv("LANGCHAIN_API_KEY")
+os.environ["LANGCHAIN_API_KEY"] = os.getenv("LANGCHAIN_API_KEY") or ""
 os.environ["LANGCHAIN_SANDBOX_V1"] = "true"
-os.environ["LANGCHAIN_SANDBOX"] = os.getenv("LANGCHAIN_PROJECT")
+os.environ["LANGCHAIN_SANDBOX"] = os.getenv("LANGCHAIN_PROJECT") or ""
 
 # llm_model = ChatOpenAI(model="gpt-5-mini-2025-08-07")
 
-groq_api_key = os.getenv("GROQ_API_KEY")
-llm_model = ChatGroq(model="llama-3.3-70b-versatile", groq_api_key=groq_api_key)
+groq_api_key = os.getenv("GROQ_API_KEY") or ""
+llm_model: Any = ChatGroq(model="llama-3.3-70b-versatile", api_key=SecretStr(groq_api_key))
 
 
 # ----------------------
@@ -384,8 +412,8 @@ class DrawTraceGenerator:
 
     def generate(self) -> DrawTrace:
         points = []
-        geolocator = Nominatim(user_agent="persona_generator")
-        location = geolocator.geocode(f"{self.persona.city}, {self.persona.state}")
+        geolocator: Nominatim = Nominatim(user_agent="persona_generator")
+        location: Location = cast(Location, geolocator.geocode(f"{self.persona.city}, {self.persona.state}"))
 
         if location:
             lat, lon = location.latitude, location.longitude
@@ -461,12 +489,12 @@ def generate_privacy_attrs_node(state: GraphState) -> Dict[str, Any]:
     return {"privacy_attrs": attrs}
 
 
-def persona_grader_node(state: GraphState) -> str:
+def persona_grader_node(state: GraphState) -> Dict[str, Any]:
     """
     Grade persona consistency and decide next step.
     Returns either 'redo' (go back to regenerate) or 'ok' (proceed).
     """
-    persona: PrivacyAttributes = state["privacy_attrs"]
+    persona: PrivacyAttributes = cast(PrivacyAttributes, state["privacy_attrs"])
     report = []
     score = 100
 
@@ -540,7 +568,7 @@ def generate_traces_node(state: GraphState) -> Dict[str, Any]:
 
 
 def grade_traces_node(state: GraphState) -> Dict[str, Any]:
-    traces = state.get("traces", {})
+    traces: Optional[Dict[str, BaseModel]] = state.get("traces", {})
     persona = state.get("privacy_attrs", {})
 
     grader_prompt = (
@@ -559,8 +587,8 @@ def grade_traces_node(state: GraphState) -> Dict[str, Any]:
         f"Persona summary: {getattr(persona, 'first_name', '')} {getattr(persona, 'last_name', '')}, "
         f"activity={getattr(persona, 'activity_description', '')}, job={getattr(persona, 'job', '')}, "
         f"city={getattr(persona, 'city', '')}\n\n"
-        f"Sensor snippet: {getattr(traces.get('sensor_trace'), 'moments', [])[:3]}\n"
-        f"GPS snippet: {getattr(traces.get('draw_trace'), 'points', [])[:3]}\n"
+        f"Sensor snippet: {getattr(getattr(traces, 'get', lambda k, d=None: None)('sensor_trace', None), 'moments', [])[:3]}\n"
+        f"GPS snippet: {getattr(getattr(traces, 'get', lambda k, d=None: None)('draw_trace', None), 'points', [])[:3]}\n"
     )
 
     response = llm_model.invoke(grader_prompt)
@@ -607,7 +635,7 @@ def save_package_node(state: GraphState) -> Dict[str, Any]:
 
     # 1️⃣ Motion file (sensor data)
     sensor_trace = traces.get("sensor_trace")
-    if sensor_trace:
+    if isinstance(sensor_trace, SensorTrace):
         motion_json = {
             "id": str(uuid.uuid4())[:20],
             "time": int(time.time() * 1000),
@@ -621,7 +649,7 @@ def save_package_node(state: GraphState) -> Dict[str, Any]:
 
     # 2️⃣ Cell file (base station)
     base_trace = traces.get("base_station_trace")
-    if base_trace:
+    if isinstance(base_trace, BaseStationTrace):
         cell_json = {
             "id": str(uuid.uuid4())[:20],
             "time": int(time.time() * 1000),
@@ -632,7 +660,7 @@ def save_package_node(state: GraphState) -> Dict[str, Any]:
 
     # 3️⃣ Record file (GPS path)
     draw_trace = traces.get("draw_trace")
-    if draw_trace:
+    if draw_trace is not None and isinstance(draw_trace, DrawTrace):
         record_json = {
             "id": str(uuid.uuid4())[:20],
             "name": f"{attrs.first_name}_{attrs.last_name}_route",
@@ -703,8 +731,8 @@ app = workflow.compile()
 # Example Usage
 # -----------------------------------------
 if __name__ == "__main__":
-    prompt = "Sarah, software engineer in San Francisco, jogging in Golden Gate Park."
-    app.invoke({"prompt": prompt})
+    prompt: str = "Sarah, software engineer in San Francisco, jogging in Golden Gate Park."
+    app.invoke(cast(GraphState, {"prompt": prompt}))
 
     # prompt_2 = (
     #     "John who is a writer. "
