@@ -2,8 +2,10 @@
 import random
 from typing import List, Dict, Any
 
+from backend.persona_generator import PrivacyAttributes
 
-def build_action_plan(persona) -> List[Dict[str, Any]]:
+
+def build_action_plan(thought: str, persona: PrivacyAttributes) -> List[Dict[str, Any]]:
     """
     Build a realistic mobile behavior session plan for a persona.
     Returns an ordered list of {app, action, args} steps.

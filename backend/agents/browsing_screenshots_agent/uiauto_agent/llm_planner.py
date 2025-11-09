@@ -4,7 +4,9 @@ import json, random
 
 from langchain_groq import ChatGroq
 
-from backend.agents.persona_generator_agent.langgraph_persona_generator import llm_model
+from backend.agents.persona_generator_agent.langgraph_persona_generator import (
+    PrivacyAttributes,
+)
 from .planner import build_action_plan
 
 # Optional: if you want real LLM reasoning (currently simulated)
@@ -35,7 +37,7 @@ Avoid repeating the same app more than twice in a row.
 
 Alternate between music, social, and camera interactions when possible.
 
-Reflect realistic routines: post-workout → music, then social media, then camera or browsing.
+Reflect realistic routines: post-workout → music, then social media, then camera or browsing or whatver you think is realistic.
 
 If one app has dominated history, pick a new one.
 
@@ -85,7 +87,7 @@ def get_next_action(
 
     # 1️⃣ Generate a base action plan
     # TODO: Improve planning -- low priority
-    base_plan = build_action_plan(persona)
+    base_plan = build_action_plan(thought, persona)
 
     # 2️⃣ Prevent repetition (no more than twice in a row)
     recent_apps = [h["action"]["app"] for h in history[-3:] if "action" in h]

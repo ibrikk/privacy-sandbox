@@ -1,0 +1,13 @@
+{
+    "venvPath": "${workspaceFolder}/backend",
+    "venv": ".venv",
+    "pythonVersion": "3.12",
+    "executionEnvironments": [
+        {
+            "root": "backend",
+            "pythonVersion": "3.12",
+            "extraPaths": []
+        }
+    ]
+}
+

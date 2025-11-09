@@ -222,7 +222,9 @@ def run_persona_session(
         max_steps: Maximum number of steps to execute.
         stop_after: Whether to stop apps after the session.
     """
-    initial_state = initialize_agent_state(persona_json_path, serial, max_steps)
+    initial_state: AgentState = initialize_agent_state(
+        persona_json_path, serial, max_steps
+    )
     d = initial_state["d"]
     final_state = None
 
