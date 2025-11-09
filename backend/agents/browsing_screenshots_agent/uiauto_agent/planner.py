@@ -3,10 +3,11 @@
 import random
 from typing import List, Dict, Any
 
+from agents.browsing_screenshots_agent.uiauto_agent.llm_planner import ThoughtAction
 from backend.agents.persona_generator_agent.langgraph_persona_generator import PrivacyAttributes   # pyright: ignore[reportMissingImports]
 
 
-def build_action_plan(thought: str, persona: PrivacyAttributes) -> List[Dict[str, Any]]:
+def build_action_plan(thoughtAction: ThoughtAction, persona: PrivacyAttributes) -> List[Dict[str, Any]]:
     """
     Build a realistic mobile behavior session plan for a persona.
     Returns an ordered list of {app, action, args} steps.
@@ -14,7 +15,6 @@ def build_action_plan(thought: str, persona: PrivacyAttributes) -> List[Dict[str
 
     plan: List[Dict[str, Any]] = []
     
-    thought = 'I just finished jogging in Golden Gate Park and I\'m feeling energized. Now, I want to listen to some music to unwind. \n\n{\n"thought": "Time to relax with some tunes after my jog",\n"action": {"app": "com.spotify.music", "action": "play_for_persona", "args": {}}\n}'
     
 
     # --- Extract key traits ---

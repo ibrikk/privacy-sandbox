@@ -118,7 +118,7 @@ def get_next_action(
 
     # 1️⃣ Generate a base action plan
     # TODO: Improve planning -- low priority
-    base_plan = build_action_plan(llm_response.thought, persona)
+    base_plan = build_action_plan(llm_response, persona)
 
     # 2️⃣ Prevent repetition (no more than twice in a row)
     recent_apps = [h["action"]["app"] for h in history[-3:] if "action" in h]
