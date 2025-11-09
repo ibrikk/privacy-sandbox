@@ -139,7 +139,7 @@ def get_next_action(
 
     chosen_action = random.choice(valid_candidates)
 
-    print(f"🤖 LLM Thought: {thought}")
+    print(f"🤖 LLM Thought: {llm_response.thought}")
     print(f"🎯 Selected Action: {chosen_action}")
 
     return chosen_action
