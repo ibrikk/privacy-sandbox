@@ -9,3 +9,6 @@ def main():
     persona_path = "Sarah_Lee_export/persona.json"  # adjust path
     print("🚀 Starting persona-driven UI automation session...")
     run_persona_session(persona_json_path=persona_path)
+
+if __name__ == "__main__":
+    main()
