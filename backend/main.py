@@ -6,7 +6,7 @@ def main():
     prompt: str = "Sarah, software engineer in San Francisco, jogging in Golden Gate Park."
     app.invoke(cast(GraphState, {"prompt": prompt}))
     
-    persona_path = "Sarah_Lee_export/persona.json"  # adjust path
+    persona_path = "../Sarah_Lee_export/persona.json"  
     print("🚀 Starting persona-driven UI automation session...")
     run_persona_session(persona_json_path=persona_path)
 
