@@ -2,8 +2,7 @@
 import random
 from typing import List, Dict, Any
 
-from agents.browsing_screenshots_agent.uiauto_agent.llm_planner import ThoughtAction
-from backend.agents.persona_generator_agent.langgraph_persona_generator import PrivacyAttributes  # pyright: ignore[reportMissingImports]
+from models import ThoughtAction, PrivacyAttributes
 
 
 def build_action_plan(thoughtAction: ThoughtAction, persona: PrivacyAttributes) -> List[Dict[str, Any]]:

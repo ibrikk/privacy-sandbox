@@ -7,16 +7,9 @@ from langchain_groq import ChatGroq
 from pydantic import BaseModel, SecretStr
 from langchain_core.output_parsers import PydanticOutputParser
 
+from models import ThoughtAction
+
 from .planner import build_action_plan
-
-class Action(BaseModel):
-    app: str
-    intent: str
-    args: Dict[str, Any]
-
-class ThoughtAction(BaseModel):
-    thought: str
-    action: Action
 
 # Optional: if you want real LLM reasoning (currently simulated)
 # from langchain_openai import ChatOpenAI

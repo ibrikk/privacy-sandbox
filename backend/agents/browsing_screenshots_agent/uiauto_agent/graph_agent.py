@@ -1,31 +1,19 @@
-# --- local debug shim (only affects this file) ---
-if __name__ == "__main__":
-    import sys, os
-
-    sys.path.append(
-        os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
-    )
-
-
-# -------------------------------------------------
-
-
 import json
 import os
 from typing import Callable, Tuple, TypedDict, List, Dict, Any, Literal, cast
 from langgraph.graph import StateGraph, END
 
 
-from backend.agents.persona_generator_agent.langgraph_persona_generator import (  # pyright: ignore[reportMissingImports]
+from models import (
     PrivacyAttributes,
 )
-from backend.agents.browsing_screenshots_agent.uiauto_agent.device import (  # pyright: ignore[reportMissingImports]
+from agents.browsing_screenshots_agent.uiauto_agent.device import (  
     connect,
     press,
     stop_app,
     get_installed_apps,
 )
-from backend.agents.browsing_screenshots_agent.uiauto_agent import (  # pyright: ignore[reportMissingImports]
+from agents.browsing_screenshots_agent.uiauto_agent import (  
     llm_planner,
     actions_spotify as SP,
     actions_facebook as FB,
@@ -35,7 +23,7 @@ from backend.agents.browsing_screenshots_agent.uiauto_agent import (  # pyright:
     # actions_weather as WTH,
 )
 
-from backend.agents.browsing_screenshots_agent.uiauto_agent.selectors import (  # pyright: ignore[reportMissingImports]
+from agents.browsing_screenshots_agent.uiauto_agent.selectors import ( 
     PKG_SPOTIFY,
     PKG_FB,
     PKG_TIKTOK,
@@ -257,10 +245,3 @@ def run_persona_session(
             summary = {k: v for k, v in final_state.items() if k != "d"}
             print(json.dumps(summary, indent=2, default=str))
 
-
-# --- main entrypoint (runs after definitions) ---
-if __name__ == "__main__":
-    persona_path = "Sarah_Lee_export/persona.json"  # adjust path
-    print("🚀 Starting persona-driven UI automation session...")
-    run_persona_session(persona_json_path=persona_path)
-# -------------------------------------------------
