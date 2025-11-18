@@ -107,6 +107,7 @@ def get_next_action(
     Prevents repetitive app use and adds diversity to persona behavior.
     """
     prompt = _build_prompt(persona, installed_apps, history, available_actions)
+    print("prompt: ", prompt)
     llm_response: ThoughtAction = _call_llm(prompt)
 
     # 1️⃣ Generate a base action plan
