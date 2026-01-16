@@ -112,19 +112,19 @@ def get_next_action(
 
     # 1️⃣ Generate a base action plan
     # TODO: Improve planning -- low priority
-    base_plan = build_action_plan(llm_response, persona)
+    base_plan: List[Dict[str, Any]] = build_action_plan(llm_response, persona, installed_apps)
 
     # 2️⃣ Prevent repetition (no more than twice in a row)
     recent_apps = [h["action"]["app"] for h in history[-3:] if "action" in h]
     overused = set(a for a in recent_apps if recent_apps.count(a) >= 2)
-    candidate_actions = [a for a in base_plan if a["app"] not in overused]
-
-    # 3️⃣ Fallback if all filtered
-    if not candidate_actions:
+    if len(overused) > 0:
+        candidate_actions = [a for a in base_plan if a["app"] not in overused]
+    else:
         candidate_actions = base_plan
 
-    # 4️⃣ Prefer apps that exist on the device
-    # TODO: Make sure this works right
+    # 4️⃣ Make sure the app is installed on the device
+    # TODO: Make sure all desired apps are installed on the device and 
+    # correctly found and all actions are available for the device
     valid_candidates = [
         a
         for a in candidate_actions

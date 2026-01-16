@@ -150,7 +150,8 @@ def get_installed_apps(d):
     """
     try:
         # '-3' means third-party apps
-        return d.app_list("-3")
+        # return d.app_list("-3")
+        return d.app_list()
     except Exception as e:
         print(f"⚠️ app_list('-3') failed ({e}); falling back to all apps.")
         try:
