@@ -37,19 +37,19 @@ def build_action_plan(thoughtAction: ThoughtAction, persona: PrivacyAttributes) 
     plan.append({"app": app, "action": intent, "args": args})
 
     # 2️⃣ Use the LLM thought for near-future continuity
-    if "facebook" in thought or app == "facebook":
+    if "facebook" in thought or "facebook" in app:
         maybe(0.7, "facebook", "search_topic", topic=f"{city} events")
         maybe(0.5, "facebook", "maybe_post_status")
 
-    if "spotify" in thought or app == "spotify":
+    if "spotify" in thought or "spotify" in app:
         maybe(0.7, "spotify", "play_for_persona")
         maybe(0.5, "facebook", "open_and_browse")
 
-    if "tiktok" in thought or app == "tiktok":
+    if "tiktok" in thought or "tiktok" in app:
         maybe(0.8, "tiktok", "watch_and_scroll")
         maybe(0.5, "camera", "take_selfie")
 
-    if "camera" in thought or app == "camera":
+    if "camera" in thought or "camera" in app:
         maybe(0.8, "camera", "take_selfie")
         maybe(0.6, "instagram", "browse_feed")
 

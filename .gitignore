@@ -1,2 +1,9 @@
 .env
 .sandbox-venv
+.lock
+__pycache__/
+.pyc
+.DS_Store
+.venv/
+.prettierrc
+.vscode/

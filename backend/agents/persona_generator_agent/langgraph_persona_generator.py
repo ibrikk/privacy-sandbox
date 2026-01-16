@@ -656,7 +656,7 @@ workflow.add_edge("package_persona", "save_package")
 workflow.add_edge("save_package", END)
 
 app = workflow.compile()
-
+# We later invoke this app in the main.py file
 # -----------------------------------------
 # Example Usage
 # -----------------------------------------

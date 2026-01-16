@@ -1,6 +1,7 @@
 langchain
 pydantic
 python-dotenv
+dotenv
 langchain-openai
 langchain-groq
 langchain-community
@@ -13,4 +14,5 @@ uiautomator2
 pillow
 langchain-core
 langgraph
+langgraph-cli
 uuid
