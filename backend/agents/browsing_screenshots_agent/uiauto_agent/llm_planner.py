@@ -113,6 +113,10 @@ def get_next_action(
     # 1️⃣ Generate a base action plan
     # TODO: Improve planning -- low priority
     base_plan: List[Dict[str, Any]] = build_action_plan(llm_response, persona, installed_apps)
+    
+    for i in base_plan:
+        if "systemui" in i["app"] or "camera" in i["app"]:
+            base_plan.remove(i)
 
     # 2️⃣ Prevent repetition (no more than twice in a row)
     recent_apps = [h["action"]["app"] for h in history[-3:] if "action" in h]

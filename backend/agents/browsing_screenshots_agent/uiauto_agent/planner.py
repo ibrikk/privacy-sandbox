@@ -41,7 +41,8 @@ def build_action_plan(thoughtAction: ThoughtAction, persona: PrivacyAttributes, 
                 return
 
     # 1️⃣ Start with the immediate LLM-selected action
-    plan.append({"app": app, "action": intent, "args": args})
+    # plan.append({"app": app, "action": intent, "args": args})
+    maybe(1, app, intent)
 
 
     def should_consider_app(app_name: str) -> bool:
