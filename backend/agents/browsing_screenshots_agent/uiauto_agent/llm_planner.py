@@ -39,7 +39,7 @@ Avoid repeating the same app more than twice in a row.
 
 Alternate between music, social, and camera interactions when possible.
 
-Reflect realistic routines: post-workout → music, then social media, then camera or browsing or whatver you think is realistic.
+Reflect realistic routines: post-workout → music, then social media, then camera or browsing, news, weather or whatver you think is realistic.
 
 If one app has dominated history, pick a new one.
 

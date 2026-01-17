@@ -1,4 +1,5 @@
 import datetime
+from datetime import date
 import json
 import math
 import os
@@ -25,7 +26,8 @@ system_message = (
     "2. Infer missing realistic details (e.g., if a 28-year-old woman is 'running in Golden Gate Park', she probably works in tech, lives near San Francisco, and earns a mid-to-high salary).\n"
     "3. Make sure demographic, income, and lifestyle attributes align logically with each other. And age matches the birthday\n"
     "4. Ensure diversity, neutrality, and privacy-awareness — avoid bias or stereotypes.\n"
-    "5. Finally, output a complete and clean PrivacyAttributes object, with all required fields filled.\n\n"
+    f"5. Make sure that the age and birthdate you assign match given it is {date.today().year}.\n"
+    "6. Finally, output a complete and clean PrivacyAttributes object, with all required fields filled.\n\n"
     "### Example 1 (for inspiration)\n"
     "Prompt: 'A 30-year-old man named David commuting to work in Seattle.'\n"
     "→ Persona: David Chen, age 30, male, Asian, lives in Seattle, WA. Bachelor's in Computer Engineering. "
