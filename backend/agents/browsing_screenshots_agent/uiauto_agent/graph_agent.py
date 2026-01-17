@@ -85,9 +85,14 @@ def execute_step(state: AgentState) -> dict:
     app, action_name = step.get("app"), step.get("action")
     key: Tuple[str, str] = cast(Tuple[str, str], (app, action_name))
 
-    fn = DISPATCH.get(key)
+    fn = None
+    if app and action_name:
+        for (dispatch_app, dispatch_action), handler_fn in DISPATCH.items():
+            if dispatch_app in app and dispatch_action == action_name:  
+                fn = handler_fn
+                break
     if not fn:
-        error_msg = f"LLM requested unknown or invalid action '{key}'."
+        error_msg = f"LLM requested unknown or invalid action '{(app, action_name)}'."
         print(f"⚠️ {error_msg}")
         new_history = state["history"] + [
             {"action": step, "status": "error", "error": error_msg}
