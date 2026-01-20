@@ -12,6 +12,12 @@ PKG_WEATHER = "com.google.android.weather"
 INSTAGRAM = {
     "search_tab": {"descriptionContains": "Search"},
     "search_edit": {"className": "android.widget.EditText"},
+    "reels_tab": {
+        "description": "Reels"
+    },
+    "home_tab": {
+        "description": "Home"
+    },
 }
 
 

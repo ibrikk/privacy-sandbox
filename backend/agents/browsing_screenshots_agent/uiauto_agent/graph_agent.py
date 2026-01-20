@@ -19,7 +19,7 @@ from agents.browsing_screenshots_agent.uiauto_agent import (
     actions_facebook as FB,
     actions_tiktok as TK,
     actions_camera as CAM,
-    # actions_instagram as IG,
+    actions_instagram as IG,
     # actions_weather as WTH,
 )
 
@@ -53,7 +53,7 @@ DISPATCH: Dict[Tuple[str, str], Callable] = {
     ("tiktok", "watch_and_scroll"): TK.watch_and_scroll,
     ("camera", "take_selfie"): CAM.take_selfie,
     # ("instagram", "browse_feed"): IG.browse_feed,
-    # ("instagram", "view_stories"): IG.view_stories,
+    ("instagram", "view_stories"): IG.view_stories,
     # ("instagram", "search_interest"): IG.search_interest,
     # ("weather", "check_weather"): WTH.check_weather,
 }
@@ -108,7 +108,7 @@ def execute_step(state: AgentState) -> dict:
     new_apps_used = state["apps_used"].copy()
     new_apps_used.add(app)
     new_history = state["history"].copy()
-
+  
     try:
         print(f"▶️  Executing: {key} | args={args}")
         # Pass persona only if the function expects it
