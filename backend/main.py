@@ -99,9 +99,11 @@ async def main():
 
             # 3. Run LangGraph
             async for updated_state in graph_app.astream(state):
-                state.update(updated_state)
-
-                action = state.get("current_action")
+                state = updated_state
+                if state["plan_step"] is not None:
+                    action = state["plan_step"]["current_action"]
+                else:
+                    action = state["record_step"]["current_action"]
                 if not action or action.get("action") == "terminate":
                     break
 

@@ -1,3 +1,7 @@
+import asyncio
+import random
+
+
 class MCPExecutor:
     def __init__(self, session):
         self.session = session
@@ -49,8 +53,8 @@ class MCPExecutor:
 
         if action == "view_reels":
             await self._instagram_view_reels()
-        elif action == "view_stories":
-            await self._instagram_view_stories()
+        elif action == "browse_feed":
+            await self._instagram_browse_feed()
         else:
             raise ValueError(f"Unknown Instagram action {action}")
 
@@ -82,3 +86,62 @@ class MCPExecutor:
         for _ in range(3):
             await self.session.call_tool("wait", {"seconds": 3})
             await self.session.call_tool("swipe", {"direction": "up"})
+    
+    async def _instagram_browse_feed(self):
+        """
+        Browse the Instagram home feed in a realistic way:
+        - Ensure we're on Home
+        - Scroll the feed
+        - Occasionally open a post
+        """
+
+        # 1️⃣ Go to Home / Feed tab
+        try:
+            await self.session.call_tool(
+                "click",
+                {"description": "Home", "timeout": 3000}
+            )
+        except Exception:
+            # Fallback: try icon-based or content-desc-based
+            try:
+                await self.session.call_tool(
+                    "click",
+                    {"description": "Feed", "timeout": 3000}
+                )
+            except Exception:
+                pass  # If already on feed, this is fine
+
+        await asyncio.sleep(random.uniform(1.0, 2.0))
+
+        # 2️⃣ Scroll feed naturally
+        scroll_count = random.randint(3, 6)
+
+        for _ in range(scroll_count):
+            await self.session.call_tool(
+                "swipe",
+                {
+                    "direction": "up",
+                    "distance": random.uniform(0.6, 0.8),
+                    "duration": random.randint(300, 600),
+                },
+            )
+            await asyncio.sleep(random.uniform(1.2, 2.5))
+
+            # 3️⃣ Occasionally tap a post
+            if random.random() < 0.3:
+                try:
+                    await self.session.call_tool(
+                        "click",
+                        {
+                            "description": "Like",
+                            "timeout": 2000
+                        }
+                    )
+                    await asyncio.sleep(random.uniform(0.8, 1.5))
+                except Exception:
+                    pass
+
+        # 4️⃣ Optional: pause as if reading
+        await asyncio.sleep(random.uniform(2.0, 4.0))
+
+    

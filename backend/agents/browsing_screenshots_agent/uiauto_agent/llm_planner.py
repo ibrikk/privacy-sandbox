@@ -85,12 +85,12 @@ com.google.android.youtube -> watch_recommended
 
 Return valid JSON:
 {{
-"thought": "...",
-"action": {
+  "thought": "...",
+  "action": {{
     "app": "<android package name>",
     "action": "<one of the allowed actions>",
-    "args": {{}},
-  }
+    "args": {{}}
+  }}
 }}
 """.strip()
 

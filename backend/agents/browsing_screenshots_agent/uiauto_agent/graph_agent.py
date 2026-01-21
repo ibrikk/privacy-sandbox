@@ -24,12 +24,12 @@ class AgentState(TypedDict):
 
 ALLOWED_ACTIONS = {
     "com.spotify.music": ["play_for_persona"],
-    "com.facebook.katana'": ["open_and_browse", "search_topic", "maybe_post_status"],
-    "com.instagram.android": ["view_stories", "view_reels"],
+    "com.facebook.katana": ["open_and_browse", "search_topic", "maybe_post_status"],
+    "com.instagram.android": ["browse_feed", "view_reels"],
     "com.zhiliaoapp.musically": ["watch_and_scroll"],
     "com.android.cameraextensions": ["take_selfie"],
     "com.linkedin.android": ["browse_feed"],
-    "com.google.android.youtube": ["watch_recommended"]
+    "com.google.android.youtube.music": ["watch_recommended"]
 }
 
 AVAILABLE_ACTIONS: List[str] = [
