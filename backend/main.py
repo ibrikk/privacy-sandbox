@@ -5,6 +5,7 @@ from mcp.client.streamable_http import streamablehttp_client
 from typing import Any, Dict, cast
 from agents.persona_generator_agent.langgraph_persona_generator import app, GraphState
 from agents.browsing_screenshots_agent.uiauto_agent.graph_agent import (initialize_agent_state, app as graph_app)
+from agents.browsing_screenshots_agent.uiauto_agent.executor import execute_action
         
 async def main():
     # Generate a persona based on the prompt
@@ -105,10 +106,8 @@ async def main():
                     break
 
                 # 4. Execute via MCP
-                await mcp.call_tool(
-                    action["action"],
-                    action.get("args", {}),
-                )
+                await execute_action(mcp, action)
+
 
             # 5. Cleanup
             await mcp.call_tool("press", {"key": "home"})

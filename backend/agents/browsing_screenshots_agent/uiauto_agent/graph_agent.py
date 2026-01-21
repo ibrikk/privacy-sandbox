@@ -27,7 +27,7 @@ ALLOWED_ACTIONS = {
     "com.facebook.katana'": ["open_and_browse", "search_topic", "maybe_post_status"],
     "com.instagram.android": ["view_stories", "view_reels"],
     "com.zhiliaoapp.musically": ["watch_and_scroll"],
-    "com.google.android.GoogleCamera": ["take_selfie"],
+    "com.android.cameraextensions": ["take_selfie"],
     "com.linkedin.android": ["browse_feed"],
     "com.google.android.youtube": ["watch_recommended"]
 }

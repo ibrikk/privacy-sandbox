@@ -18,7 +18,7 @@ def build_action_plan(thoughtAction: ThoughtAction, persona: PrivacyAttributes, 
     thought = (thoughtAction.thought or "").lower()
     action = thoughtAction.action
     app = (action.app or "").lower()
-    intent = (action.intent or "").lower()
+    action_name = (action.action or "").lower()
     args = action.args or {}
 
     act = (persona.activity_description or "").lower()
@@ -29,31 +29,33 @@ def build_action_plan(thoughtAction: ThoughtAction, persona: PrivacyAttributes, 
     age = int(persona.age or 30)
 
     # --- Helper: probabilistic append ---
-    def maybe(p: float, app: str, action: str, **kwargs):
+    def maybe(p: float, app_hint: str, action: str, **kwargs):
         if random.random() < p:
-            matched = False
-            for i in installed_apps:
-                if app in i:
-                    plan.append({"app": i, "action": action, "args": kwargs})
-                    matched = True
-                    break
-            if not matched:
-                return
+            for pkg in installed_apps:
+                if app_hint in pkg:
+                    plan.append({
+                        "app": pkg,
+                        "action": action,
+                        "args": kwargs,
+                    })
+                    return
 
     # 1️⃣ Start with the immediate LLM-selected action
-    # plan.append({"app": app, "action": intent, "args": args})
-    maybe(1, app, intent)
+    plan.append({
+    "app": action.app,
+    "action": action_name,
+    "args": action.args or {},
+    })
 
 
-    def should_consider_app(app_name: str) -> bool:
-        """Check if app is mentioned in thought/app context and not recently used."""
+    def should_consider_app(app_hint: str) -> bool:
         recent_apps = {step["app"] for step in plan[-3:]}
-        # Check if app_name is contained in any recent app (e.g., "spotify" in "com.spotify.test")
-        is_recently_used = any(app_name in recent_app for recent_app in recent_apps)
+        recently_used = any(app_hint in a for a in recent_apps)
+
         return (
-            app_name in thought
-            or app_name in app
-        ) and not is_recently_used
+            app_hint in thought
+            or app_hint in app
+        ) and not recently_used
 
         
     if should_consider_app("facebook"):

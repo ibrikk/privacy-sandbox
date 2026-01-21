@@ -69,7 +69,7 @@ class PersonaPackage(BaseModel):
     
 class Action(BaseModel):
     app: str
-    intent: str
+    action: str
     args: Dict[str, Any]
 
 class ThoughtAction(BaseModel):

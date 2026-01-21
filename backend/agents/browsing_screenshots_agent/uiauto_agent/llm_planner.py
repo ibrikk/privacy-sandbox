@@ -75,21 +75,22 @@ com.instagram.android
 com.google.android.youtube
 com.linkedin.android
 
-Available Actions (format: <package>.<action>):
-com.spotify.music.play_for_persona
-com.facebook.katana.open_and_browse
-com.facebook.katana.search_topic
-com.facebook.katana.maybe_post_status
-com.instagram.android.view_stories
-com.instagram.android.view_reels
-com.zhiliaoapp.musically.watch_and_scroll
-com.linkedin.android.browse_feed
-com.google.android.youtube.watch_recommended
+Allowed Actions:
+com.spotify.music -> play_for_persona
+com.facebook.katana -> open_and_browse, search_topic, maybe_post_status
+com.instagram.android -> view_stories, view_reels
+com.zhiliaoapp.musically -> watch_and_scroll
+com.linkedin.android -> browse_feed
+com.google.android.youtube -> watch_recommended
 
 Return valid JSON:
 {{
 "thought": "...",
-"action": {{"app": "...", "action": "...", "args": {{}}}}
+"action": {
+    "app": "<android package name>",
+    "action": "<one of the allowed actions>",
+    "args": {{}},
+  }
 }}
 """.strip()
 
