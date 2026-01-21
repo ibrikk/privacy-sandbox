@@ -1,13 +1,16 @@
+import asyncio
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
+
 from typing import Any, Dict, cast
 from agents.persona_generator_agent.langgraph_persona_generator import app, GraphState
-from agents.browsing_screenshots_agent.uiauto_agent.graph_agent import run_persona_session
+from agents.browsing_screenshots_agent.uiauto_agent.graph_agent import (initialize_agent_state, app as graph_app)
         
-def main():
+async def main():
     # Generate a persona based on the prompt
     # prompt: str = "Sarah, software engineer in San Francisco, jogging in Golden Gate Park."
 
 # 🏃‍♀️ Physical / Movement-Oriented
-
     prompt = "Miguel, a 29-year-old product designer in Austin, jogging along Lady Bird Lake while listening to music."
 
     # “Daniel, a 41-year-old sales manager in Denver, hiking a trail outside the city on a Saturday afternoon.”
@@ -55,7 +58,61 @@ def main():
     # persona_path = f"{save_dir}/persona.json"
     persona_path = f"Miguel_Garcia_export/persona.json"
     print("🚀 Starting persona-driven UI automation session...")
-    run_persona_session(persona_json_path=persona_path)
+    
+    MCP_URL = "http://localhost:8080/mcp"
+
+    async with streamablehttp_client(MCP_URL) as (read, write, _):
+        async with ClientSession(read, write) as mcp:
+            
+            await mcp.initialize()
+            
+            # 1. Get installed apps from device
+            raw_apps = await mcp.call_tool("get_installed_apps")
+
+            def normalize_apps(raw_apps) -> list[str]:
+                """
+                Normalize MCP get_installed_apps CallToolResult into List[str].
+                """
+                if not raw_apps:
+                    return []
+
+                if hasattr(raw_apps, "structuredContent"):
+                    data = raw_apps.structuredContent
+                    if isinstance(data, dict) and "apps" in data:
+                        return data["apps"]
+
+                raise ValueError(f"Unexpected get_installed_apps result: {raw_apps}")
+
+
+            installed_apps = normalize_apps(raw_apps)
+            
+            # 2. Initialize planning state
+            state = initialize_agent_state(
+                persona_json_path=persona_path,
+                installed_apps=installed_apps,
+                max_steps=10,
+            )
+            
+            state = state.copy()
+            
+
+            # 3. Run LangGraph
+            async for updated_state in graph_app.astream(state):
+                state.update(updated_state)
+
+                action = state.get("current_action")
+                if not action or action.get("action") == "terminate":
+                    break
+
+                # 4. Execute via MCP
+                await mcp.call_tool(
+                    action["action"],
+                    action.get("args", {}),
+                )
+
+            # 5. Cleanup
+            await mcp.call_tool("press", {"key": "home"})
+            print("✅ Session finished")
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

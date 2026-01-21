@@ -1,3 +1,3 @@
-from .uiauto_agent import run_persona_session
+from .uiauto_agent.graph_agent import initialize_agent_state
 
-__all__ = ["run_persona_session"]
+__all__ = ["initialize_agent_state"]

@@ -15,8 +15,27 @@ from .planner import build_action_plan
 # from langchain_openai import ChatOpenAI
 # llm = ChatOpenAI(model="gpt-5-mini-2025-08-07")
 
+def _normalize_installed_apps(installed_apps: List[Any]) -> List[str]:
+    """
+    Normalize installed apps into a list of package-name strings.
+    Accepts strings, tuples, or dicts (from MCP).
+    """
+    normalized = []
+    for app in installed_apps:
+        if isinstance(app, str):
+            normalized.append(app)
+        elif isinstance(app, dict):
+            # MCP-style: {"package": "...", "label": "..."}
+            if "package" in app:
+                normalized.append(app["package"])
+        elif isinstance(app, (list, tuple)):
+            # Tuple-style: ("com.pkg.name", "Label")
+            normalized.append(app[0])
+    return normalized
+
 
 def _build_prompt(persona, installed_apps, history, available_actions) -> str:
+    installed_apps = _normalize_installed_apps(installed_apps)
     persona_details = json.dumps(persona.__dict__, indent=2)
     return f"""
 You are an expert Android user emulating a specific persona to test mobile app privacy.
@@ -44,6 +63,28 @@ Reflect realistic routines: post-workout → music, then social media, then came
 If one app has dominated history, pick a new one.
 
 Keep reasoning short and human-like.
+
+IMPORTANT:
+- The "app" field MUST be one of the following Android package names exactly.
+- Do NOT use short names like "spotify" or "youtube".
+
+Valid apps:
+com.spotify.music
+com.facebook.katana
+com.instagram.android
+com.google.android.youtube
+com.linkedin.android
+
+Available Actions (format: <package>.<action>):
+com.spotify.music.play_for_persona
+com.facebook.katana.open_and_browse
+com.facebook.katana.search_topic
+com.facebook.katana.maybe_post_status
+com.instagram.android.view_stories
+com.instagram.android.view_reels
+com.zhiliaoapp.musically.watch_and_scroll
+com.linkedin.android.browse_feed
+com.google.android.youtube.watch_recommended
 
 Return valid JSON:
 {{
@@ -106,33 +147,32 @@ def get_next_action(
     Combines deterministic planning with LLM-like reasoning.
     Prevents repetitive app use and adds diversity to persona behavior.
     """
+    installed_apps = _normalize_installed_apps(installed_apps)
+    print("INSTALLED APPS (planner):", installed_apps[:3])
+    print("TYPE:", type(installed_apps[0]))
     prompt = _build_prompt(persona, installed_apps, history, available_actions)
     print("prompt: ", prompt)
     llm_response: ThoughtAction = _call_llm(prompt)
 
     # 1️⃣ Generate a base action plan
-    # TODO: Improve planning -- low priority
     base_plan: List[Dict[str, Any]] = build_action_plan(llm_response, persona, installed_apps)
     
-    for i in base_plan:
-        if "systemui" in i["app"] or "camera" in i["app"]:
-            base_plan.remove(i)
+    # for i in base_plan:
+    #     if "systemui" in i["app"] or "camera" in i["app"]:
+    #         base_plan.remove(i)
 
-    # 2️⃣ Prevent repetition (no more than twice in a row)
+    # Filter invalid apps
     recent_apps = [h["action"]["app"] for h in history[-3:] if "action" in h]
     overused = set(a for a in recent_apps if recent_apps.count(a) >= 2)
-    if len(overused) > 0:
-        candidate_actions = [a for a in base_plan if a["app"] not in overused]
-    else:
-        candidate_actions = base_plan
+    candidate_actions = (
+        [a for a in base_plan if a["app"] not in overused]
+        if overused else base_plan
+    )
 
-    # 4️⃣ Make sure the app is installed on the device
-    # TODO: Make sure all desired apps are installed on the device and 
-    # correctly found and all actions are available for the device
+    # Ensure app is installed
     valid_candidates = [
-        a
-        for a in candidate_actions
-        if any(pkg_part in app for app in installed_apps for pkg_part in [a["app"]])
+        a for a in candidate_actions
+        if any(a["app"] in pkg for pkg in installed_apps)
     ] or candidate_actions
 
     chosen_action = random.choice(valid_candidates)
