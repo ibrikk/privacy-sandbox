@@ -7,28 +7,6 @@ from langgraph.graph import StateGraph, END
 from models import (
     PrivacyAttributes,
 )
-from agents.browsing_screenshots_agent.uiauto_agent.device import (  
-    connect,
-    press,
-    stop_app,
-    get_installed_apps,
-)
-from agents.browsing_screenshots_agent.uiauto_agent import (  
-    llm_planner,
-    actions_spotify as SP,
-    actions_facebook as FB,
-    actions_tiktok as TK,
-    actions_camera as CAM,
-    actions_instagram as IG,
-    # actions_weather as WTH,
-)
-
-from agents.browsing_screenshots_agent.uiauto_agent.selectors import ( 
-    PKG_SPOTIFY,
-    PKG_FB,
-    PKG_TIKTOK,
-    PKG_CAMERA,
-)
 
 
 # 1. Define the State for our graph
@@ -44,19 +22,14 @@ class AgentState(TypedDict):
     apps_used: set
 
 
-# The same dispatch table from the previous agent
-DISPATCH: Dict[Tuple[str, str], Callable] = {
-    ("spotify", "play_for_persona"): SP.play_for_persona,
-    ("facebook", "open_and_browse"): FB.open_and_browse,
-    ("facebook", "search_topic"): FB.search_topic,
-    ("facebook", "maybe_post_status"): FB.maybe_post_status,
-    ("tiktok", "watch_and_scroll"): TK.watch_and_scroll,
-    ("camera", "take_selfie"): CAM.take_selfie,
-    # ("instagram", "browse_feed"): IG.browse_feed,
-    ("instagram", "view_stories"): IG.view_stories,
-    # ("instagram", "search_interest"): IG.search_interest,
-    # ("weather", "check_weather"): WTH.check_weather,
+ALLOWED_ACTIONS = {
+    "spotify": ["play_for_persona"],
+    "facebook": ["open_and_browse", "search_topic", "maybe_post_status"],
+    "instagram": ["view_stories", "view_reels"],
+    "tiktok": ["watch_and_scroll"],
+    "camera": ["take_selfie"],
 }
+
 
 # 2. Define the Nodes for our graph
 
@@ -188,7 +161,11 @@ def initialize_agent_state(
         d=d,
         persona=persona,
         installed_apps=get_installed_apps(d),
-        available_actions=[f"{app}.{act}" for app, act in DISPATCH.keys()],
+        available_actions = [
+        f"{app}.{action}"
+        for app, actions in ALLOWED_ACTIONS.items()
+        for action in actions
+        ],
         history=[],
         current_action={},
         steps_taken=0,
