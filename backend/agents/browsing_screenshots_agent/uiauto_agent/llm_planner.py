@@ -107,7 +107,8 @@ def _call_llm(prompt: str) -> ThoughtAction:
 
     # llm_model = ChatOpenAI(model="gpt-5-mini-2025-08-07")
 
-    llm_model = ChatGroq(model="llama-3.3-70b-versatile", api_key=SecretStr(groq_api_key))
+    # llm_model = ChatGroq(model="llama-3.3-70b-versatile", api_key=SecretStr(groq_api_key))
+    llm_model = ChatGroq(model="llama-3.1-8b-instant", api_key=SecretStr(groq_api_key))
 
     # LangChain output parser for your Pydantic model
     parser = PydanticOutputParser(pydantic_object=ThoughtAction)
