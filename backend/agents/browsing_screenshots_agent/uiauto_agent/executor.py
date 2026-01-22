@@ -76,14 +76,18 @@ async def spotify_play_for_persona(mcp, **_):
     await asyncio.sleep(3)
 
     # Tap first recommendation
-    selector = "Drake"
-    selector_type = "Search by content description"
-    await mcp.call_tool("click",
+    PLAY_SELECTORS = [
+                ("com.spotify.music:id/image", "resourceId"),
+                ("com.spotify.music:id/button_play_and_pause", "resourceId"),
+                # ("microcore", "text"),
+            ]
+    for selector, selector_type in PLAY_SELECTORS:
+        await mcp.call_tool("click",
             {
                 "selector": selector,
                 "selector_type": selector_type,
             },)
-    await human_pause(2, 4)
+        await human_pause(2, 4)
 
     # Let music play for a bit
     for _ in range(random.randint(2, 4)):
@@ -91,7 +95,20 @@ async def spotify_play_for_persona(mcp, **_):
 
         # Occasionally skip
         if random.random() < 0.25:
-            await mcp.call_tool("press_key", {"key": "media_next"})
+            await mcp.call_tool("click", 
+                                {"selector": "com.spotify.music:id/now_playing_bar_layout",
+                                 "selector_type": "resourceId"
+                                })
+            await mcp.call_tool("click", 
+                                {"selector": "Next",
+                                "selector_type": "description"})
+            await mcp.call_tool("swipe", 
+                                {
+                                "start_x": 100,
+                                "start_y": 1,
+                                "end_x": 100,
+                                "end_y": 2200,
+                            })
             await human_pause(1, 2)
 
 
