@@ -28,7 +28,7 @@ ALLOWED_ACTIONS = {
     "com.instagram.android": ["browse_feed", "view_reels"],
     "com.zhiliaoapp.musically": ["watch_and_scroll"],
     "com.android.cameraextensions": ["take_selfie"],
-    "com.linkedin.android": ["browse_feed"],
+    # "com.linkedin.android": ["browse_feed"],
     "com.google.android.youtube.music": ["watch_recommended"]
 }
 

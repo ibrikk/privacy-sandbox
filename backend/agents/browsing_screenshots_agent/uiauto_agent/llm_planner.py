@@ -12,8 +12,8 @@ from models import ThoughtAction
 from .planner import build_action_plan
 
 # Optional: if you want real LLM reasoning (currently simulated)
-# from langchain_openai import ChatOpenAI
-# llm = ChatOpenAI(model="gpt-5-mini-2025-08-07")
+from langchain_openai import ChatOpenAI
+llm = ChatOpenAI(model="gpt-5-mini-2025-08-07")
 
 def _normalize_installed_apps(installed_apps: List[Any]) -> List[str]:
     """
@@ -73,14 +73,12 @@ com.spotify.music
 com.facebook.katana
 com.instagram.android
 com.google.android.youtube
-com.linkedin.android
 
 Allowed Actions:
 com.spotify.music -> play_for_persona
 com.facebook.katana -> open_and_browse, search_topic, maybe_post_status
 com.instagram.android -> view_stories, view_reels
 com.zhiliaoapp.musically -> watch_and_scroll
-com.linkedin.android -> browse_feed
 com.google.android.youtube -> watch_recommended
 
 Return valid JSON:
@@ -105,10 +103,10 @@ def _call_llm(prompt: str) -> ThoughtAction:
 
     groq_api_key = os.getenv("GROQ_API_KEY") or ""
 
-    # llm_model = ChatOpenAI(model="gpt-5-mini-2025-08-07")
+    llm_model = ChatOpenAI(model="gpt-5-mini-2025-08-07")
 
     # llm_model = ChatGroq(model="llama-3.3-70b-versatile", api_key=SecretStr(groq_api_key))
-    llm_model = ChatGroq(model="llama-3.1-8b-instant", api_key=SecretStr(groq_api_key))
+    # llm_model = ChatGroq(model="llama-3.1-8b-instant", api_key=SecretStr(groq_api_key))
 
     # LangChain output parser for your Pydantic model
     parser = PydanticOutputParser(pydantic_object=ThoughtAction)
