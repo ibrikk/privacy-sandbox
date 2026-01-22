@@ -94,7 +94,7 @@ async def spotify_play_for_persona(mcp, **_):
         await human_pause(3, 6)
 
         # Occasionally skip
-        if random.random() < 0.25:
+        if random.random() < 0.50:
             await mcp.call_tool("click", 
                                 {"selector": "com.spotify.music:id/now_playing_bar_layout",
                                  "selector_type": "resourceId"
@@ -109,7 +109,7 @@ async def spotify_play_for_persona(mcp, **_):
                                 "end_x": 100,
                                 "end_y": 1500,
                             })
-            await human_pause(1, 2)
+            await human_pause(3, 6)
 
 
 # ============================================================
@@ -135,7 +135,9 @@ async def facebook_search_topic(mcp, topic: str = "fitness"):
     await ensure_device_ready(mcp)
     await mcp.call_tool("start_app", {"package_name": "com.facebook.katana"})
     await asyncio.sleep(2)
-
+    await mcp.call_tool("scroll_to", 
+                                {"selector": "Home, tab 1 of 6",
+                                "selector_type": "description"})
     try:
         await mcp.call_tool("click", {"description": "Search", "timeout": 3000})
     except Exception:
@@ -156,21 +158,19 @@ async def facebook_maybe_post_status(mcp, **_):
     await ensure_device_ready(mcp)
     await mcp.call_tool("start_app", {"package_name": "com.facebook.katana"})
     await asyncio.sleep(2)
-
+    await mcp.call_tool("scroll_to", 
+                                {"selector": "Home, tab 1 of 6",
+                                "selector_type": "description"})
     try:
         await mcp.call_tool(
             "click",
-            {"description": "What's on your mind", "timeout": 4000},
+            {"selector": "What's on your mind?",
+             "selector_type": "description"},
         )
     except Exception:
         return
 
     await human_pause(1, 2)
-
-    # Decide to bail or post
-    if random.random() > 0.35:
-        await mcp.call_tool("press_key", {"key": "back"})
-        return
 
     text = random.choice(
         [
@@ -180,14 +180,10 @@ async def facebook_maybe_post_status(mcp, **_):
             "Long day, but productive.",
         ]
     )
-
+    #TODO: Need to fix this
     await mcp.call_tool("send_text", {"text": text})
+    await mcp.call_tool("click", {"selector": "Done", "selector_type": "description"})
     await human_pause(1, 2)
-
-    try:
-        await mcp.call_tool("click", {"description": "Post", "timeout": 3000})
-    except Exception:
-        await mcp.call_tool("press_key", {"key": "back"})
 
 
 # ============================================================
@@ -198,6 +194,8 @@ async def instagram_browse_feed(mcp, **_):
     await ensure_device_ready(mcp)
     await mcp.call_tool("start_app", {"package_name": "com.instagram.android"})
     await asyncio.sleep(3)
+    await mcp.call_tool("click", {"selector": "Home", 
+                                  "selector_type": "description"})
 
     for _ in range(random.randint(4, 8)):
         await vertical_scroll(mcp)
@@ -231,7 +229,8 @@ async def instagram_view_reels(mcp, **_):
     await mcp.call_tool("start_app", {"package_name": "com.instagram.android"})
     await asyncio.sleep(3)
 
-    await mcp.call_tool("click", {"x": 800, "y": 2200})
+    await mcp.call_tool("click", {"selector": "Reels", 
+                                  "selector_type": "description"})
     await asyncio.sleep(1.5)
 
     for _ in range(random.randint(3, 6)):

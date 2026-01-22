@@ -34,63 +34,72 @@ def _normalize_installed_apps(installed_apps: List[Any]) -> List[str]:
     return normalized
 
 
-def _build_prompt(persona, installed_apps, history, available_actions) -> str:
-    installed_apps = _normalize_installed_apps(installed_apps)
+def _build_prompt(
+    persona,
+    installed_apps,
+    history,
+    available_actions,
+    banned_apps: set[str],
+) -> str:
     persona_details = json.dumps(persona.__dict__, indent=2)
-    return f"""
-You are an expert Android user emulating a specific persona to test mobile app privacy.
-Behave naturally, choosing the next app interaction that fits the persona's lifestyle.
 
-**Persona Details:**
-```json
-{persona_details}
-Installed Third-party Apps: {", ".join(installed_apps)}
+    prompt = f"""
+    You are an expert Android user emulating a specific persona to test mobile app privacy.
 
-Recent Session History (last 5 actions):
-{json.dumps(history[-5:], indent=2)}
+    Persona Details:
+    {persona_details}
 
-Available Actions:
-{", ".join(available_actions)}
+    Installed Apps:
+    {", ".join(installed_apps)}
 
-Guidelines:
+    Recent History (last 5 actions):
+    {json.dumps(history[-5:], indent=2)}
 
-Avoid repeating the same app more than twice in a row.
+    Available Actions:
+    {", ".join(available_actions)}
 
-Alternate between music, social, and camera interactions when possible.
+    Behavior Rules:
+    - Avoid repeating the same app more than twice in a row
+    - Alternate between music, social, and browsing
+    - Behave naturally and human-like
+    """
 
-Reflect realistic routines: post-workout → music, then social media, then camera or browsing, news, weather or whatver you think is realistic.
+    # 🔥 HARD COOLDOWN RULES (this is what stops Spotify spam)
+    if banned_apps:
+        prompt += "\nFORBIDDEN APPS (HARD COOLDOWN):\n"
+        for app in banned_apps:
+            prompt += f"- {app}\n"
+        prompt += (
+            "\nYou MUST NOT choose any forbidden app. "
+            "Selecting a forbidden app is an error.\n"
+        )
 
-If one app has dominated history, pick a new one.
-
-Keep reasoning short and human-like.
-
-IMPORTANT:
-- The "app" field MUST be one of the following Android package names exactly.
-- Do NOT use short names like "spotify" or "youtube".
-
+    prompt += """
 Valid apps:
-com.spotify.music
-com.facebook.katana
-com.instagram.android
-com.google.android.youtube
+- com.facebook.katana
+- com.instagram.android
+- com.spotify.music
+- com.google.android.youtube
 
 Allowed Actions:
-com.spotify.music -> play_for_persona
 com.facebook.katana -> open_and_browse, search_topic, maybe_post_status
 com.instagram.android -> view_stories, view_reels
-com.zhiliaoapp.musically -> watch_and_scroll
+com.spotify.music -> play_for_persona
 com.google.android.youtube -> watch_recommended
 
-Return valid JSON:
-{{
+Return VALID JSON ONLY:
+{
   "thought": "...",
-  "action": {{
+  "action": {
     "app": "<android package name>",
-    "action": "<one of the allowed actions>",
-    "args": {{}}
-  }}
-}}
-""".strip()
+    "action": "<allowed action>",
+    "args": {}
+  }
+}
+"""
+
+    return prompt.strip()
+
 
 
 def _call_llm(prompt: str) -> ThoughtAction:
@@ -136,6 +145,14 @@ def _call_llm(prompt: str) -> ThoughtAction:
 
     # return json.dumps({"thought": thought, "action": {}})
 
+def is_on_hard_cooldown(app: str, history: list, window: int = 2) -> bool:
+    recent_apps = [
+        h["action"]["app"]
+        for h in history[-window:]
+        if "action" in h
+    ]
+    return app in recent_apps
+
 
 def get_next_action(
     persona,
@@ -143,41 +160,40 @@ def get_next_action(
     history: List[Dict[str, Any]],
     available_actions: List[str],
 ) -> Dict[str, Any]:
-    """
-    Combines deterministic planning with LLM-like reasoning.
-    Prevents repetitive app use and adds diversity to persona behavior.
-    """
+
     installed_apps = _normalize_installed_apps(installed_apps)
-    print("INSTALLED APPS (planner):", installed_apps[:3])
-    print("TYPE:", type(installed_apps[0]))
-    prompt = _build_prompt(persona, installed_apps, history, available_actions)
-    print("prompt: ", prompt)
-    llm_response: ThoughtAction = _call_llm(prompt)
 
-    # 1️⃣ Generate a base action plan
-    base_plan: List[Dict[str, Any]] = build_action_plan(llm_response, persona, installed_apps)
-    
-    # for i in base_plan:
-    #     if "systemui" in i["app"] or "camera" in i["app"]:
-    #         base_plan.remove(i)
+    # ✅ ALWAYS define it first
+    banned_apps: set[str] = set()
 
-    # Filter invalid apps
-    recent_apps = [h["action"]["app"] for h in history[-3:] if "action" in h]
-    overused = set(a for a in recent_apps if recent_apps.count(a) >= 2)
-    candidate_actions = (
-        [a for a in base_plan if a["app"] not in overused]
-        if overused else base_plan
+    # Hard cooldown logic
+    if is_on_hard_cooldown("com.spotify.music", history, window=2):
+        banned_apps.add("com.spotify.music")
+
+    if banned_apps:
+        print("⛔ Hard cooldown active for:", banned_apps)
+
+    # Now it's safe to use
+    prompt = _build_prompt(
+        persona,
+        installed_apps,
+        history,
+        available_actions,
+        banned_apps,
     )
 
-    # Ensure app is installed
-    valid_candidates = [
-        a for a in candidate_actions
-        if any(a["app"] in pkg for pkg in installed_apps)
-    ] or candidate_actions
+    llm_response: ThoughtAction = _call_llm(prompt)
 
-    chosen_action = random.choice(valid_candidates)
+    base_plan = build_action_plan(llm_response, persona, installed_apps)
 
-    print(f"🤖 LLM Thought: {llm_response.thought}")
-    print(f"🎯 Selected Action: {chosen_action}")
+    valid_actions = [
+        a for a in base_plan if a["app"] not in banned_apps
+    ] or base_plan
+
+    chosen_action = random.choice(valid_actions)
+
+    print(f"🤖 Thought: {llm_response.thought}")
+    print(f"🎯 Action: {chosen_action}")
 
     return chosen_action
+
