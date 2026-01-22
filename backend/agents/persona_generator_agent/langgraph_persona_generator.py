@@ -38,7 +38,7 @@ system_message = (
     "Prompt: 'A 42-year-old woman named Alicia having coffee before work in Chicago.'\n"
     "→ Persona: Alicia Torres, age 42, female, Hispanic, lives in Chicago, IL. MBA, marketing director at a healthcare firm, "
     "income $145,000/year, married with grade-school children, homeowner in Oak Park. "
-    "Online behavior: uses LinkedIn and Facebook daily, privacy-indifferent. "
+    "Online behavior: uses Facebook daily, privacy-indifferent. "
     "Activity: 'sitting at a cafe checking emails.'\n\n"
     "### Output rules\n"
     "- Always respond with a structured PrivacyAttributes object.\n"

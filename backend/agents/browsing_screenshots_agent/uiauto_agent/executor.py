@@ -105,9 +105,9 @@ async def spotify_play_for_persona(mcp, **_):
             await mcp.call_tool("swipe", 
                                 {
                                 "start_x": 100,
-                                "start_y": 1,
+                                "start_y": 700,
                                 "end_x": 100,
-                                "end_y": 2200,
+                                "end_y": 1500,
                             })
             await human_pause(1, 2)
 
