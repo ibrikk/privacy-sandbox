@@ -113,7 +113,8 @@ async def main():
 
 
             # 5. Cleanup
-            await mcp.call_tool("press", {"key": "home"})
+            await mcp.call_tool("stop_all_apps")
+            await mcp.call_tool("screen_off")
             print("✅ Session finished")
 
 if __name__ == "__main__":

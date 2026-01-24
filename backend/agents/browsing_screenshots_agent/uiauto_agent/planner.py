@@ -68,20 +68,20 @@ def build_action_plan(thoughtAction: ThoughtAction, persona: PrivacyAttributes, 
 
     if should_consider_app("tiktok"):
         maybe(0.8, "tiktok", "watch_and_scroll")
-        maybe(0.5, "camera", "take_selfie")
+        # maybe(0.5, "camera", "take_selfie")
 
     if should_consider_app("camera"):
-        maybe(0.8, "camera", "take_selfie")
+        maybe(0.8, "facebook", "maybe_post_status")
         maybe(0.6, "instagram", "browse_feed")
 
     # 3️⃣ Persona-based tendencies (job, lifestyle, etc.)
     if "developer" in job or "engineer" in job:
-        # maybe(0.6, "linkedin", "browse_feed")
+        maybe(0.6, "linkedin", "open_and_browse")
         maybe(0.3, "facebook", "open_and_browse")
 
     if "designer" in job or "artist" in job:
         maybe(0.8, "instagram", "view_stories")
-        maybe(0.6, "camera", "take_selfie")
+        maybe(0.6, "facebook", "maybe_post_status")
 
     if "travel" in act or "commute" in act or "drive" in act:
         maybe(0.8, "maps", "search_location", query=f"cafes near {city}")
@@ -144,7 +144,7 @@ def build_action_plan(thoughtAction: ThoughtAction, persona: PrivacyAttributes, 
     maybe(prob(0.25, online_behavior_bias["commerce"]), "temu", "open_homepage")
 
     # --- Professional ---
-    # maybe(prob(0.4, online_behavior_bias["professional"]), "linkedin", "browse_feed")
+    maybe(prob(0.4, online_behavior_bias["professional"]), "linkedin", "open_and_browse")
     maybe(prob(0.2, online_behavior_bias["professional"]), "news", "check_headlines")
 
     # 5️⃣ Age and income adjustments
@@ -156,7 +156,7 @@ def build_action_plan(thoughtAction: ThoughtAction, persona: PrivacyAttributes, 
         maybe(0.4, "apps.weather", "check_weather")
 
     if "high" in income_type:
-        # maybe(0.5, "linkedin", "browse_feed")
+        maybe(0.5, "linkedin", "open_and_browse")
         maybe(0.4, "news", "check_headlines")
 
     # 6️⃣ Fallback

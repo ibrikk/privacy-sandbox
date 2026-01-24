@@ -28,7 +28,7 @@ async def execute_action(mcp, action: Dict[str, Any]):
 
         "com.zhiliaoapp.musically.watch_and_scroll": tiktok_watch_and_scroll,
 
-        # "com.linkedin.android.browse_feed": linkedin_browse_feed,
+        "com.linkedin.android.browse_feed": linkedin_open_and_browse,
 
         "com.google.android.youtube.watch_recommended": youtube_watch_recommended,
     }
@@ -60,6 +60,15 @@ async def vertical_scroll(mcp):
             "end_y": 1,
         }
     )
+
+async def swipe_down(mcp):
+    await mcp.call_tool("swipe", 
+            {
+                "start_x": 100,
+                "start_y": 700,
+                "end_x": 100,
+                "end_y": 1500,
+            })
 
 async def ensure_device_ready(mcp):
     await mcp.call_tool("screen_on", {})
@@ -102,13 +111,8 @@ async def spotify_play_for_persona(mcp, **_):
             await mcp.call_tool("click", 
                                 {"selector": "Next",
                                 "selector_type": "description"})
-            await mcp.call_tool("swipe", 
-                                {
-                                "start_x": 100,
-                                "start_y": 700,
-                                "end_x": 100,
-                                "end_y": 1500,
-                            })
+            # swipe down
+            await swipe_down(mcp)
             await human_pause(3, 6)
 
 
@@ -212,12 +216,12 @@ async def instagram_view_stories(mcp, **_):
     await mcp.call_tool("start_app", {"package_name": "com.instagram.android"})
     await asyncio.sleep(3)
 
-    await mcp.call_tool("click", {"x": 180, "y": 260})
+    await mcp.call_tool("click", {"selector": "Reels", "selector_type": "description"})
     await asyncio.sleep(1.5)
 
     stories = random.randint(2, 5)
     for _ in range(stories):
-        await mcp.call_tool("click", {"x": 900, "y": 800})
+        await vertical_scroll(mcp)
         await human_pause(1.2, 2.5)
 
         if random.random() < 0.15:
@@ -262,17 +266,17 @@ async def tiktok_watch_and_scroll(mcp, **_):
 # LinkedIn
 # ============================================================
 
-# async def linkedin_browse_feed(mcp, **_):
-#     await ensure_device_ready(mcp)
-#     await mcp.call_tool("start_app", {"package_name": "com.linkedin.android"})
-#     await asyncio.sleep(3)
+async def linkedin_open_and_browse(mcp, **_):
+    await ensure_device_ready(mcp)
+    await mcp.call_tool("start_app", {"package_name": "com.linkedin.android"})
+    await asyncio.sleep(3)
 
-#     for _ in range(random.randint(3, 5)):
-#         await vertical_scroll(mcp)
-#         await human_pause()
+    for _ in range(random.randint(3, 5)):
+        await vertical_scroll(mcp)
+        await human_pause()
 
-#         if random.random() < 0.25:
-#             await human_pause(2, 3)
+        if random.random() < 0.25:
+            await human_pause(2, 3)
 
 
 # ============================================================
@@ -284,10 +288,10 @@ async def youtube_watch_recommended(mcp, **_):
     await mcp.call_tool("start_app", {"package_name": "com.google.android.youtube"})
     await asyncio.sleep(3)
 
-    await mcp.call_tool("click", {"x": 540, "y": 600})
+    await mcp.call_tool("click", {"selector": "Shorts", "selector_type": "text"})
     await asyncio.sleep(random.uniform(6, 12))
 
     # Light interaction while watching
     if random.random() < 0.3:
-        await mcp.call_tool("click", {"x": 540, "y": 1800})
+        await vertical_scroll(mcp)
         await human_pause(1, 2)

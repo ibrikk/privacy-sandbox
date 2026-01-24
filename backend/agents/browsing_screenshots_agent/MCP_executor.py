@@ -20,8 +20,8 @@ class MCPExecutor:
             pkg = "com.instagram.android"
         elif app == "tiktok":
             pkg = "com.zhiliaoapp.musically"
-        elif app == "camera":
-            pkg = "com.google.android.GoogleCamera"
+        # elif app == "camera":
+        #     pkg = "com.google.android.GoogleCamera"
         else:
             raise ValueError(f"Unknown app {app}")
 
@@ -59,28 +59,13 @@ class MCPExecutor:
             raise ValueError(f"Unknown Instagram action {action}")
 
     async def _instagram_view_reels(self):
-        # Try semantic click first
-        clicked = False
-
         try:
             await self.session.call_tool(
                 "click",
                 {"description": "Reels", "timeout": 3000}
             )
-            clicked = True
         except Exception:
             pass
-
-        # Fallback: bottom-nav second tab (very common layout)
-        if not clicked:
-            width, height = 1080, 2400  # conservative default
-            await self.session.call_tool(
-                "click",
-                {
-                    "x": int(width * 0.5),
-                    "y": int(height * 0.95),
-                }
-            )
 
         # Watch + scroll like a human
         for _ in range(3):
