@@ -142,10 +142,6 @@ async def facebook_search_topic(mcp, topic: str = "fitness"):
     await mcp.call_tool("scroll_to", 
                                 {"selector": "Home, tab 1 of 6",
                                 "selector_type": "description"})
-    try:
-        await mcp.call_tool("click", {"description": "Search", "timeout": 3000})
-    except Exception:
-        return
 
     await human_pause(0.5, 1)
     await mcp.call_tool("send_text", {"text": topic})
@@ -186,7 +182,7 @@ async def facebook_maybe_post_status(mcp, **_):
     )
     #TODO: Need to fix this
     await mcp.call_tool("send_text", {"text": text})
-    await mcp.call_tool("click", {"selector": "Done", "selector_type": "description"})
+    await mcp.call_tool("click", {"selector": "Done", "selector_type": "text"})
     await human_pause(1, 2)
 
 
