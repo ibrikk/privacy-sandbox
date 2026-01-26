@@ -28,7 +28,7 @@ async def execute_action(mcp, action: Dict[str, Any]):
 
         "com.zhiliaoapp.musically.watch_and_scroll": tiktok_watch_and_scroll,
 
-        "com.linkedin.android.browse_feed": linkedin_open_and_browse,
+        # "com.linkedin.android.browse_feed": linkedin_open_and_browse,
 
         "com.google.android.youtube.watch_recommended": youtube_watch_recommended,
     }
@@ -159,30 +159,35 @@ async def facebook_maybe_post_status(mcp, **_):
     await mcp.call_tool("start_app", {"package_name": "com.facebook.katana"})
     await asyncio.sleep(2)
     await mcp.call_tool("scroll_to", 
-                                {"selector": "Home, tab 1 of 6",
-                                "selector_type": "description"})
+                                        {"selector": "Home, tab 1 of 6",
+                                        "selector_type": "description"})
     try:
         await mcp.call_tool(
             "click",
             {"selector": "What's on your mind?",
-             "selector_type": "description"},
-        )
+            "selector_type": "description"},
+            )
+        await mcp.call_tool(
+            "click",
+            {"selector": "What's on your mind?",
+            "selector_type": "text"},
+            )
     except Exception:
-        return
-
-    await human_pause(1, 2)
+                return
 
     text = random.choice(
-        [
-            "Good run today 💪",
-            "Trying to stay consistent.",
-            "Nice weather out today ☀️",
-            "Long day, but productive.",
-        ]
-    )
-    #TODO: Need to fix this
+                [
+                "Quick run done 💪",
+                "Didn’t feel like running but did it anyway 🏃‍♂️",
+                "Not the fastest run, but still counts 😅",
+                "Trying to stay consistent these days 💪",
+                "Legs are dead… but kind of in a good way 😂",
+                ]
+            )
+    await mcp.call_tool("click", {"selector": "Done", "selector_type": "description"})
     await mcp.call_tool("send_text", {"text": text})
-    await mcp.call_tool("click", {"selector": "Done", "selector_type": "text"})
+    await mcp.call_tool("click", {"selector": "Post", "selector_type": "description"})
+
     await human_pause(1, 2)
 
 
