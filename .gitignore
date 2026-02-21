@@ -7,3 +7,4 @@ __pycache__/
 .venv/
 .prettierrc
 .vscode/
+mcp-android-server-python/
