@@ -207,7 +207,7 @@ def initialize_agent_state(
     - installed_apps should come from the orchestrator (MCP call)
     - no device/session objects are stored here
     """
-    persona = load_persona_from_json(persona_json_path)
+    persona: PrivacyAttributes = load_persona_from_json(persona_json_path)
 
     return {
         "persona": persona,
