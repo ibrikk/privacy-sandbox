@@ -3,6 +3,7 @@ from datetime import date
 import json
 import math
 import os
+import profile
 import random
 import time
 from typing import Any, Dict, List, Optional, TypedDict, Union, cast
@@ -15,38 +16,16 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field, SecretStr
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, BaseMessage
-from models import PersonaPackage, PrivacyAttributes
+from models import BehavioralParameters, BehaviorSpec, PersonaPackage, PrivacyAttributes, UserInput
 
-system_message = (
-    "You are a privacy and behavior modeling expert generating lifelike human personas for mobile privacy simulations. "
-    "Each persona should be realistic, contextually grounded, and internally consistent across demographics, occupation, "
-    "lifestyle, and daily activity.\n\n"
-    "### Your reasoning steps (to yourself before output)\n"
-    "1. Read the user prompt carefully to understand who the person is and what they're doing.\n"
-    "2. Infer missing realistic details (e.g., if a 28-year-old woman is 'running in Golden Gate Park', she probably works in tech, lives near San Francisco, and earns a mid-to-high salary).\n"
-    "3. Make sure demographic, income, and lifestyle attributes align logically with each other. And age matches the birthday\n"
-    "4. Ensure diversity, neutrality, and privacy-awareness — avoid bias or stereotypes.\n"
-    f"5. Make sure that the age and birthdate you assign match given it is {date.today().year}.\n"
-    "6. Finally, output a complete and clean PrivacyAttributes object, with all required fields filled.\n\n"
-    "### Example 1 (for inspiration)\n"
-    "Prompt: 'A 30-year-old man named David commuting to work in Seattle.'\n"
-    "→ Persona: David Chen, age 30, male, Asian, lives in Seattle, WA. Bachelor's in Computer Engineering. "
-    "Software developer at Amazon, income $125,000/year, single, renter in downtown. "
-    "Online behavior: reads Reddit tech forums, moderate app usage, privacy-conscious. "
-    "Activity: 'commuting on the light rail while browsing phone notifications.'\n\n"
-    "### Example 2\n"
-    "Prompt: 'A 42-year-old woman named Alicia having coffee before work in Chicago.'\n"
-    "→ Persona: Alicia Torres, age 42, female, Hispanic, lives in Chicago, IL. MBA, marketing director at a healthcare firm, "
-    "income $145,000/year, married with grade-school children, homeowner in Oak Park. "
-    "Online behavior: uses Facebook daily, privacy-indifferent. "
-    "Activity: 'sitting at a cafe checking emails.'\n\n"
-    "### Output rules\n"
-    "- Always respond with a structured PrivacyAttributes object.\n"
-    "- Do NOT include reasoning or intermediate text.\n"
-    "- Do NOT mention sensors or devices — only human and contextual fields.\n"
-    "- Use realistic, diverse, non-stereotypical details.\n"
-    "- Output must be consistent and human-like, suitable for downstream sensor spoofing simulation."
-)
+system_message = f"""
+    You are generating structured PrivacyAttributes.
+    Ensure logical consistency across fields.
+    Do not invent extreme or rare scenarios.
+    Match birthday with age.
+    Avoid stereotypes.
+    Return only structured output.
+    """
 
 
 from langchain_groq import ChatGroq
@@ -127,8 +106,172 @@ class PersonaGenerator:
     def generate(self, messages: List[BaseMessage]) -> PrivacyAttributes:
         structured_llm = self.llm.with_structured_output(PrivacyAttributes)
         return structured_llm.invoke(messages)
+    
+    def infer_behavior_spec(self, ui: UserInput) -> BehaviorSpec:
+        chrono_map = {"morning": 0.2, "neutral": 0.5, "night": 0.8}
+        style_map  = {"long_sessions": 0.2, "mixed": 0.5, "quick_checks": 0.8}
+        use_map    = {"social": 0.7, "mixed": 0.5, "video_news": 0.3}
+        intensity_map = {"light": 0.35, "typical": 0.55, "heavy": 0.75}
 
+        context = ui.context
+        if context == "home" and ui.hour_of_day >= 18:
+            context2 = "home_evening"
+        elif context == "home":
+            context2 = "other"
+        else:
+            context2 = cast(Any, context)
 
+        # mobility prior from context + activity
+        if context2 == "commuting":
+            mobility = 0.75
+        elif context2 == "waiting":
+            mobility = 0.35
+        elif ui.activity_state == "active":
+            mobility = 0.55
+        else:
+            mobility = 0.25
+
+        return BehaviorSpec(
+            chronotype=chrono_map[ui.chronotype_self_report],
+            attentional_granularity=style_map[ui.phone_style],
+            baseline_intensity=intensity_map[getattr(ui, "usage_level", "typical")],
+            engagement_social_weight=use_map[ui.primary_use],
+            mobility_radius=mobility,
+            context=context2,
+            activity_state=ui.activity_state,
+            day_type=ui.day_type,
+            hour_of_day=ui.hour_of_day,
+        )
+
+    
+
+    def derive_behavioral_parameters(self, spec: BehaviorSpec) -> BehavioralParameters:
+        def clamp(x: float, lo: float, hi: float) -> float:
+            return max(lo, min(hi, x))
+        
+        c = clamp(spec.chronotype, 0.0, 1.0)
+        g = clamp(spec.attentional_granularity, 0.0, 1.0)
+        I = clamp(spec.baseline_intensity, 0.0, 1.0)
+        S = clamp(spec.engagement_social_weight, 0.0, 1.0)
+        m = clamp(spec.mobility_radius, 0.0, 1.0)
+
+        # --- Waking window (simple chronotype proxy) ---
+        # morning types start earlier; night types later
+        waking_start = int(round(clamp(7 + 2*c, 6, 10)))   # 6–10
+        waking_end   = int(round(clamp(23 + 2*c, 22, 2+24))) % 24  # 22–2 (wrap)
+
+        # --- Daily usage minutes (baseline + chronotype effect) ---
+        # baseline: 180–360 mins; chronotype adds 0–80 mins (your earlier sketch)
+        total_daily = 180 + 180*I + 80*c
+        total_daily = clamp(total_daily, 60, 540)
+
+        # --- Baseline pickups/hour (stable rhythm + style/intensity) ---
+        # “every ~5 minutes” => 12/hour as a center.
+        pickups = 8 + 8*I + 4*g      # ~8–20/hour
+        pickups = clamp(pickups, 4, 24)
+
+        mean_interval = 3600.0 / pickups  # seconds
+
+        # --- Session duration (unlock→lock) ---
+        # quick checks => shorter; long_sessions => longer
+        avg_sess = 90 + 240*(1-g) + 120*I      # ~90–450
+        avg_sess = clamp(avg_sess, 30, 900)
+
+        # variance bigger for long-session people and evenings
+        sess_var = 400 + 1200*(1-g) + 600*I
+        sess_var = clamp(sess_var, 100, 5000)
+
+        # --- Glances ---
+        # high granularity => more glances
+        glance_p = clamp(0.15 + 0.70*g, 0.05, 0.90)
+
+        # --- App loops ---
+        # more likely for longer sessions + home evening
+        app_loop = clamp(0.10 + 0.35*(1-g) + (0.15 if spec.context == "home_evening" else 0.0), 0.05, 0.70)
+
+        # --- Temporal shift + late night probability ---
+        temporal_shift = (c - 0.5) * 6.0  # ±3 hours
+        late_night = clamp(0.05 + 0.45*c, 0.02, 0.70)
+
+        # --- Context modifiers (duration changes more than frequency) ---
+        dur_mult = 1.0
+        freq_mult = 1.0
+
+        if spec.context == "work":
+            dur_mult = 0.4
+        elif spec.context == "home_evening":
+            dur_mult = 1.5
+        elif spec.context == "waiting":
+            freq_mult = 1.3
+        elif spec.context == "commuting":
+            dur_mult = 0.8
+            freq_mult = 1.1
+
+        # --- Activity gating (active movement suppresses interaction) ---
+        gate = 1.0 if spec.activity_state == "stationary" else 0.25
+
+        # apply gating to frequency (optional) and slightly to duration
+        pickups_eff = clamp(pickups * freq_mult * gate, 1, 30)
+        avg_sess_eff = clamp(avg_sess * dur_mult * (0.9 + 0.2*(1-gate)), 15, 1200)
+
+        # --- App selection weights ---
+        social_w = clamp(S, 0.05, 0.95)
+        process_w = 1.0 - social_w
+
+        nav_w = 0.10
+        music_w = 0.10
+        if spec.context == "commuting":
+            nav_w = 0.35
+            music_w = 0.25
+
+        # renormalize (keep it simple)
+        # you can later add more categories
+        base_sum = social_w + process_w + nav_w + music_w
+        social_w /= base_sum
+        process_w /= base_sum
+        nav_w /= base_sum
+        music_w /= base_sum
+
+        # --- Mobility targets (rough, tunable priors) ---
+        rog = 1.0 + 12.0*m   # km-ish scale placeholder; document units explicitly
+        ent = 0.8 + 2.5*m
+
+        # --- Validation anchors ---
+        exploit = clamp(0.65 + 0.15*I - 0.10*(1 if spec.day_type == "weekend" else 0), 0.40, 0.90)
+        frag = clamp(g, 0.0, 1.0)
+
+        # earliest/latest use hours: proxy from waking window + conscientious-like effect later
+        earliest = waking_start
+        latest = waking_end
+
+        return BehavioralParameters(
+            total_daily_usage_minutes=total_daily,
+            baseline_pickups_per_hour=pickups_eff,
+            temporal_peak_shift=temporal_shift,
+            late_night_usage_probability=late_night,
+            earliest_use_hour=int(earliest),
+            latest_use_hour=int(latest),
+            avg_session_duration_seconds=avg_sess_eff,
+            session_duration_variance=sess_var,
+            app_loop_probability=app_loop,
+            glance_probability=glance_p,
+            context_duration_multiplier=dur_mult,
+            context_frequency_multiplier=freq_mult,
+            interaction_gate_probability=gate,
+            social_weight=social_w,
+            process_weight=process_w,
+            navigation_weight=nav_w,
+            music_weight=music_w,
+            radius_of_gyration_target=rog,
+            location_entropy_target=ent,
+            exploit_fraction_target=exploit,
+            fragmentation_index_target=frag,
+            mean_interaction_interval_seconds=3600.0 / pickups_eff,
+            waking_start_hour=waking_start,
+            waking_end_hour=waking_end,
+        )
+        
+        
 class SensorTraceGenerator:
     def __init__(self, persona: PrivacyAttributes, duration_s=60, fps=30):
         self.persona = persona
@@ -383,26 +526,29 @@ class DrawTraceGenerator:
         )
 
 
+
 # -----------------------------------------
 # LangGraph Implementation
 # -----------------------------------------
 
 
 class GraphState(TypedDict):
-    prompt: str
-    privacy_attrs: Optional[PrivacyAttributes]
-    traces: Optional[Dict[str, BaseModel]]
+    prompt: UserInput
+    demographics: PrivacyAttributes
+    behavior_spec: BehaviorSpec
+    parameters: BehavioralParameters
+    traces: Dict[str, BaseModel]
     persona_package: Optional[PersonaPackage]
     save_dir: Optional[str]
 
 
-def _ensure_privacy_attrs(attrs: Optional[PrivacyAttributes]) -> PrivacyAttributes:
+def _ensure_privacy_attrs(attrs: PrivacyAttributes) -> PrivacyAttributes:
     if not attrs:
         raise ValueError("privacy_attrs not found. Run generate_privacy_attrs first.")
     return attrs
 
 
-def _ensure_traces(traces: Optional[Dict[str, BaseModel]]) -> Dict[str, BaseModel]:
+def _ensure_traces(traces: Dict[str, BaseModel]) -> Dict[str, BaseModel]:
     if not traces:
         raise ValueError("traces not found. Run generate_traces next.")
     return traces
@@ -410,81 +556,29 @@ def _ensure_traces(traces: Optional[Dict[str, BaseModel]]) -> Dict[str, BaseMode
 
 # 1) Generate PrivacyAttributes ONLY
 def generate_privacy_attrs_node(state: GraphState) -> Dict[str, Any]:
-    prompt = state["prompt"]
-    messages = [
+    messages: List[BaseMessage] = [
         SystemMessage(content=system_message),
-        HumanMessage(content=prompt),
+        HumanMessage(content=f"""
+                    Generate a realistic persona with the following attributes:
+                    Age: {state["prompt"].age}
+                    City: {state["prompt"].city}
+                    Job: {state["prompt"].job}
+                    Current Activity: {state["prompt"].activity_state}
+                    Make sure to generate a realistic persona with the given attributes.
+                    """),
     ]
     persona_generator = PersonaGenerator()
-    attrs = persona_generator.generate(messages)
+    attrs: PrivacyAttributes = persona_generator.generate(messages)
+    behavioral_spec: BehaviorSpec = persona_generator.infer_behavior_spec(state["prompt"])
+    behavioral_params: BehavioralParameters = persona_generator.derive_behavioral_parameters(behavioral_spec)
 
-    return {"privacy_attrs": attrs}
+    return {"demographics": attrs, "behavior_spec": behavioral_spec, "parameters": behavioral_params}
 
-
-def persona_grader_node(state: GraphState) -> Dict[str, Any]:
-    """
-    Grade persona consistency and decide next step.
-    Returns either 'redo' (go back to regenerate) or 'ok' (proceed).
-    """
-    persona: PrivacyAttributes = cast(PrivacyAttributes, state["privacy_attrs"])
-    report = []
-    score = 100
-
-    # --- AGE ↔ BIRTHDAY check ---
-    try:
-        birth_year = datetime.datetime.strptime(persona.birthday, "%Y-%m-%d").year
-        current_year = datetime.datetime.now().year
-        derived_age = current_year - birth_year
-        if abs(derived_age - int(persona.age)) > 1:
-            persona.age = f"{derived_age}"
-        if abs(derived_age - int(persona.age)) > 1:
-            report.append(
-                f"Age mismatch: derived {derived_age} vs stated {persona.age}"
-            )
-            score -= 15
-    except Exception as e:
-        report.append(f"Invalid birthday format: {e}")
-        score -= 20
-
-    # --- ZIP ↔ format ---
-    if persona.zip_code:
-        if not persona.zip_code.isdigit() or len(persona.zip_code) not in (5, 9):
-            report.append("ZIP code format invalid")
-            score -= 10
-
-    # --- Occupation ↔ Income sanity ---
-    if persona.job and persona.income:
-        occ = persona.job.lower()
-        try:
-            income_val = int(str(persona.income).replace(",", "").replace("$", ""))
-        except ValueError:
-            income_val = 0
-
-        if ("intern" in occ or "assistant" in occ) and income_val > 80000:
-            report.append("Income too high for entry-level occupation")
-            score -= 10
-        elif (
-            "director" in occ or "vp" in occ or "founder" in occ
-        ) and income_val < 70000:
-            report.append("Income too low for senior occupation")
-            score -= 10
-
-    # --- ADDRESS completeness ---
-    missing = [f for f in [persona.city, persona.state] if not f]
-    if missing:
-        report.append("Incomplete address info")
-        score -= 5
-
-    # --- Decision ---
-    valid = score >= 75 and len(report) <= 2
-    decision = "proceed" if valid else "redo"
-    print(f"\n🧩 Persona Grader Results:\n  Score: {score}\n  Issues: {report}\n")
-    return {"decision": decision}
 
 
 # 2) Generate traces independently
 def generate_traces_node(state: GraphState) -> Dict[str, Any]:
-    attrs = _ensure_privacy_attrs(state.get("privacy_attrs"))
+    attrs = _ensure_privacy_attrs(state["demographics"])
 
     sensor_trace = SensorTraceGenerator(attrs).generate()
     base_trace = BaseStationTraceGenerator().generate()
@@ -537,21 +631,24 @@ def grade_traces_node(state: GraphState) -> Dict[str, Any]:
 
 # 3) Package persona and traces together
 def package_persona_node(state: GraphState) -> Dict[str, Any]:
-    attrs = _ensure_privacy_attrs(state.get("privacy_attrs"))
-    traces = _ensure_traces(state.get("traces"))
+    attrs = _ensure_privacy_attrs(state["demographics"])
+    traces = _ensure_traces(state["traces"])
 
-    package = PersonaPackage(persona=attrs, traces=traces)
+    package = PersonaPackage(profile=attrs, 
+                             behavior_spec=state["behavior_spec"], 
+                             parameters=state["parameters"], 
+                             traces=traces)
 
     return {"persona_package": package}
 
 
 # 4) Save everything from the package
 def save_package_node(state: GraphState) -> Dict[str, Any]:
-    package = state.get("persona_package")
+    package = state["persona_package"]
     if not package:
         raise ValueError("persona_package not found. Run package_persona_node first.")
 
-    attrs = package.persona
+    attrs = package.profile
     traces = package.traces
     export_root = f"{attrs.first_name}_{attrs.last_name}_export"
     os.makedirs(export_root, exist_ok=True)
@@ -629,25 +726,25 @@ def save_package_node(state: GraphState) -> Dict[str, Any]:
 workflow = StateGraph(GraphState)
 
 workflow.add_node("generate_privacy_attrs", generate_privacy_attrs_node)
-workflow.add_node("grade_persona", persona_grader_node)
 workflow.add_node("generate_traces", generate_traces_node)
-workflow.add_node("grade_traces_node", grade_traces_node)
+workflow.add_node("grade_traces", grade_traces_node)
 workflow.add_node("package_persona", package_persona_node)
 workflow.add_node("save_package", save_package_node)
 
 workflow.set_entry_point("generate_privacy_attrs")
-workflow.add_edge("generate_privacy_attrs", "grade_persona")
+# workflow.add_edge("generate_privacy_attrs", "grade_persona")
+# workflow.add_conditional_edges(
+#     "grade_persona",
+#     lambda output: output["decision"],  # the node returns either "proceed" or "redo"
+#     {
+#         "proceed": "generate_traces",
+#         "redo": "generate_privacy_attrs",
+#     },
+# )
+workflow.add_edge("generate_privacy_attrs", "generate_traces")
+workflow.add_edge("generate_traces", "grade_traces")
 workflow.add_conditional_edges(
-    "grade_persona",
-    lambda output: output["decision"],  # the node returns either "proceed" or "redo"
-    {
-        "proceed": "generate_traces",
-        "redo": "generate_privacy_attrs",
-    },
-)
-workflow.add_edge("generate_traces", "grade_traces_node")
-workflow.add_conditional_edges(
-    "grade_traces_node",
+    "grade_traces",
     lambda x: x["decision"],
     {
         "proceed": "package_persona",

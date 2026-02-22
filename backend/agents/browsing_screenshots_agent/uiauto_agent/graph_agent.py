@@ -2,6 +2,7 @@ import json
 import os
 from typing import Callable, Tuple, TypedDict, List, Dict, Any, Literal, cast
 from agents.browsing_screenshots_agent.uiauto_agent import llm_planner
+from agents.browsing_screenshots_agent.uiauto_agent.metrics import app_distribution, entropy, repetition_rate
 from langgraph.graph import StateGraph, END
 
 
@@ -20,7 +21,7 @@ class AgentState(TypedDict):
     steps_taken: int
     max_steps: int
     apps_used: List[str] 
-
+    mode: Literal["heuristic", "random"]
 
 ALLOWED_ACTIONS = {
     "com.spotify.music": ["play_for_persona"],
@@ -102,8 +103,9 @@ def plan_step(state: AgentState) -> AgentState:
         state["installed_apps"],
         state["history"],
         state["available_actions"],
+        state["mode"],
     )
-
+    
     action = _normalize_action(raw)
     
     # If LLM returns nothing / malformed, terminate.
@@ -200,7 +202,7 @@ def load_persona_from_json(persona_json_path: str) -> PrivacyAttributes:
 
 
 def initialize_agent_state(
-    persona_json_path: str, installed_apps: list[str], max_steps: int = 10
+    persona_json_path: str, installed_apps: list[str], max_steps: int = 10, mode: Literal["heuristic", "random"] = "heuristic"
 ) -> AgentState:
     """Initialize AgentState from a persona.json file path.
     Note:
@@ -213,6 +215,7 @@ def initialize_agent_state(
         "persona": persona,
         "installed_apps": installed_apps,
         "available_actions": list(AVAILABLE_ACTIONS),
+        "mode": mode,
         "history": [],
         "current_action": {},
         "steps_taken": 0,

@@ -1,7 +1,8 @@
 import os
-from typing import List, Dict, Any, cast
+from typing import List, Dict, Any, Literal, cast
 import json, random
 
+from agents.browsing_screenshots_agent.uiauto_agent.metrics import app_distribution
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_groq import ChatGroq
 from pydantic import BaseModel, SecretStr
@@ -162,11 +163,16 @@ def get_next_action(
     installed_apps: List[str],
     history: List[Dict[str, Any]],
     available_actions: List[str],
+    mode: Literal["heuristic", "random"],
 ) -> Dict[str, Any]:
 
     installed_apps = _normalize_installed_apps(installed_apps)
+    
+    if mode == "random":
+        valid_actions = [a.split(".") for a in available_actions]
+        chosen_action = random.choice(valid_actions)
+        return {"app": chosen_action[0], "action": chosen_action[1], "args": {}}
 
-    # ✅ ALWAYS define it first
     banned_apps: set[str] = set()
 
     # Hard cooldown logic
@@ -197,6 +203,7 @@ def get_next_action(
 
     print(f"🤖 Thought: {llm_response.thought}")
     print(f"🎯 Action: {chosen_action}")
+    
 
     return chosen_action
 
