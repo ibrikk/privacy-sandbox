@@ -16,7 +16,13 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field, SecretStr
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, BaseMessage
-from models import BehavioralParameters, BehaviorSpec, PersonaPackage, PrivacyAttributes, UserInput
+from models import (
+    BehavioralParameters,
+    BehaviorSpec,
+    PersonaPackage,
+    PrivacyAttributes,
+    UserInput,
+)
 
 system_message = f"""
     You are generating structured PrivacyAttributes.
@@ -43,7 +49,9 @@ os.environ["LANGCHAIN_SANDBOX"] = os.getenv("LANGCHAIN_PROJECT") or ""
 # llm_model = ChatOpenAI(model="gpt-5-mini-2025-08-07")
 
 groq_api_key = os.getenv("GROQ_API_KEY") or ""
-llm_model: Any = ChatGroq(model="llama-3.3-70b-versatile", api_key=SecretStr(groq_api_key))
+llm_model: Any = ChatGroq(
+    model="llama-3.3-70b-versatile", api_key=SecretStr(groq_api_key)
+)
 
 
 # ----------------------
@@ -94,6 +102,7 @@ class DrawTrace(BaseModel):
         default_factory=list, description="The points of the draw trace"
     )
 
+
 # -----------------------------------------
 # Generators
 # -----------------------------------------
@@ -106,20 +115,72 @@ class PersonaGenerator:
     def generate(self, messages: List[BaseMessage]) -> PrivacyAttributes:
         structured_llm = self.llm.with_structured_output(PrivacyAttributes)
         return structured_llm.invoke(messages)
-    
+
     def infer_behavior_spec(self, ui: UserInput) -> BehaviorSpec:
+        # Literature support:
+        # Chronotype operationalized via MEQ or time-of-day distribution.
+        # Evening types show higher night usage.
+        # Medium effect size (d ≈ 0.51).
+        # TODO
+        # BUT 0.2 and 0.8 are arbitrary anchors.
+        # Computational grounding would require:
+        # either mapping to a known MEQ score range
+        # or calibrating to distribution percentiles
+        # Right now this is a linear encoding of a categorical variable.
         chrono_map = {"morning": 0.2, "neutral": 0.5, "night": 0.8}
-        style_map  = {"long_sessions": 0.2, "mixed": 0.5, "quick_checks": 0.8}
-        use_map    = {"social": 0.7, "mixed": 0.5, "video_news": 0.3}
+        # Literature support:
+        # Fragmentation measured via:
+        # percent of short sessions
+        # glances
+        # micro-usage thresholds
+        # High fragmentation → short interactions.
+        # Mapping:
+        # quick_checks → 0.8
+        # long_sessions → 0.2
+        # ✔ Conceptually aligned
+        # ✔ Matches literature direction
+        # And this is arguably stronger grounding than chronotype because fragmentation directly maps to measurable behavior (p25 ≤ 8 sec, median 23 sec etc.)
+        # Still heuristic scaling, but defensible.
+        # Verdict:
+        # Strong conceptual grounding.
+        style_map = {"long_sessions": 0.2, "mixed": 0.5, "quick_checks": 0.8}
+        #         There is no paper giving a numeric 0.7 vs 0.3 ratio.
+        # So this is design-driven, not empirically derived.
+        # Verdict:
+        # TODO
+        # Conceptually grounded, not empirically anchored.
+        use_map = {"social": 0.7, "mixed": 0.5, "video_news": 0.3}
+        # Reported:
+        # Median 245 minutes/day
+        # Some heavy users up to 5–6 hours
+        # Pickups 58–72 median
+        # TODO
+        # You have not tied those categories to those values.
+        # Right now this is purely heuristic scaling.
+        # This is fine for an internal latent variable, but it is not grounded until you define:
+        # light = bottom quartile
+        # typical = median
+        # heavy = top quartile
+        # That would make it grounded.
         intensity_map = {"light": 0.35, "typical": 0.55, "heavy": 0.75}
 
-        context = ui.context
+        # Literature:
+        # Radius of gyration correlates with mobility diversity.
+        # Commuting increases spatial radius.
+        # Waiting likely low mobility.
+        # Active movement increases movement amplitude.
+        # This mapping is directionally correct.
+        # But numeric levels are heuristic.
+        # TODO
+        # Verdict:
+        # Conceptually grounded, not empirically calibrated.
+        context: str = ui.context
         if context == "home" and ui.hour_of_day >= 18:
             context2 = "home_evening"
         elif context == "home":
             context2 = "other"
         else:
-            context2 = cast(Any, context)
+            context2 = context
 
         # mobility prior from context + activity
         if context2 == "commuting":
@@ -143,12 +204,11 @@ class PersonaGenerator:
             hour_of_day=ui.hour_of_day,
         )
 
-    
-
     def derive_behavioral_parameters(self, spec: BehaviorSpec) -> BehavioralParameters:
+        # clamp function to ensure the value is between the given range
         def clamp(x: float, lo: float, hi: float) -> float:
             return max(lo, min(hi, x))
-        
+
         c = clamp(spec.chronotype, 0.0, 1.0)
         g = clamp(spec.attentional_granularity, 0.0, 1.0)
         I = clamp(spec.baseline_intensity, 0.0, 1.0)
@@ -157,41 +217,45 @@ class PersonaGenerator:
 
         # --- Waking window (simple chronotype proxy) ---
         # morning types start earlier; night types later
-        waking_start = int(round(clamp(7 + 2*c, 6, 10)))   # 6–10
-        waking_end   = int(round(clamp(23 + 2*c, 22, 2+24))) % 24  # 22–2 (wrap)
+        waking_start = int(round(clamp(7 + 2 * c, 6, 10)))  # 6–10
+        waking_end = int(round(clamp(23 + 2 * c, 22, 2 + 24))) % 24  # 22–2 (wrap)
 
         # --- Daily usage minutes (baseline + chronotype effect) ---
         # baseline: 180–360 mins; chronotype adds 0–80 mins (your earlier sketch)
-        total_daily = 180 + 180*I + 80*c
+        total_daily = 180 + 180 * I + 80 * c
         total_daily = clamp(total_daily, 60, 540)
 
         # --- Baseline pickups/hour (stable rhythm + style/intensity) ---
         # “every ~5 minutes” => 12/hour as a center.
-        pickups = 8 + 8*I + 4*g      # ~8–20/hour
+        pickups = 8 + 8 * I + 4 * g  # ~8–20/hour
         pickups = clamp(pickups, 4, 24)
 
         mean_interval = 3600.0 / pickups  # seconds
 
         # --- Session duration (unlock→lock) ---
         # quick checks => shorter; long_sessions => longer
-        avg_sess = 90 + 240*(1-g) + 120*I      # ~90–450
+        avg_sess = 90 + 240 * (1 - g) + 120 * I  # ~90–450
         avg_sess = clamp(avg_sess, 30, 900)
 
         # variance bigger for long-session people and evenings
-        sess_var = 400 + 1200*(1-g) + 600*I
+        sess_var = 400 + 1200 * (1 - g) + 600 * I
         sess_var = clamp(sess_var, 100, 5000)
 
         # --- Glances ---
         # high granularity => more glances
-        glance_p = clamp(0.15 + 0.70*g, 0.05, 0.90)
+        glance_p = clamp(0.15 + 0.70 * g, 0.05, 0.90)
 
         # --- App loops ---
         # more likely for longer sessions + home evening
-        app_loop = clamp(0.10 + 0.35*(1-g) + (0.15 if spec.context == "home_evening" else 0.0), 0.05, 0.70)
+        app_loop = clamp(
+            0.10 + 0.35 * (1 - g) + (0.15 if spec.context == "home_evening" else 0.0),
+            0.05,
+            0.70,
+        )
 
         # --- Temporal shift + late night probability ---
         temporal_shift = (c - 0.5) * 6.0  # ±3 hours
-        late_night = clamp(0.05 + 0.45*c, 0.02, 0.70)
+        late_night = clamp(0.05 + 0.45 * c, 0.02, 0.70)
 
         # --- Context modifiers (duration changes more than frequency) ---
         dur_mult = 1.0
@@ -212,7 +276,7 @@ class PersonaGenerator:
 
         # apply gating to frequency (optional) and slightly to duration
         pickups_eff = clamp(pickups * freq_mult * gate, 1, 30)
-        avg_sess_eff = clamp(avg_sess * dur_mult * (0.9 + 0.2*(1-gate)), 15, 1200)
+        avg_sess_eff = clamp(avg_sess * dur_mult * (0.9 + 0.2 * (1 - gate)), 15, 1200)
 
         # --- App selection weights ---
         social_w = clamp(S, 0.05, 0.95)
@@ -233,11 +297,15 @@ class PersonaGenerator:
         music_w /= base_sum
 
         # --- Mobility targets (rough, tunable priors) ---
-        rog = 1.0 + 12.0*m   # km-ish scale placeholder; document units explicitly
-        ent = 0.8 + 2.5*m
+        rog = 1.0 + 12.0 * m  # km-ish scale placeholder; document units explicitly
+        ent = 0.8 + 2.5 * m
 
         # --- Validation anchors ---
-        exploit = clamp(0.65 + 0.15*I - 0.10*(1 if spec.day_type == "weekend" else 0), 0.40, 0.90)
+        exploit = clamp(
+            0.65 + 0.15 * I - 0.10 * (1 if spec.day_type == "weekend" else 0),
+            0.40,
+            0.90,
+        )
         frag = clamp(g, 0.0, 1.0)
 
         # earliest/latest use hours: proxy from waking window + conscientious-like effect later
@@ -270,8 +338,8 @@ class PersonaGenerator:
             waking_start_hour=waking_start,
             waking_end_hour=waking_end,
         )
-        
-        
+
+
 class SensorTraceGenerator:
     def __init__(self, persona: PrivacyAttributes, duration_s=60, fps=30):
         self.persona = persona
@@ -488,7 +556,9 @@ class DrawTraceGenerator:
     def generate(self) -> DrawTrace:
         points = []
         geolocator: Nominatim = Nominatim(user_agent="persona_generator")
-        location: Location = cast(Location, geolocator.geocode(f"{self.persona.city}, {self.persona.state}"))
+        location: Location = cast(
+            Location, geolocator.geocode(f"{self.persona.city}, {self.persona.state}")
+        )
 
         if location:
             lat, lon = location.latitude, location.longitude
@@ -526,7 +596,6 @@ class DrawTraceGenerator:
         )
 
 
-
 # -----------------------------------------
 # LangGraph Implementation
 # -----------------------------------------
@@ -558,22 +627,31 @@ def _ensure_traces(traces: Dict[str, BaseModel]) -> Dict[str, BaseModel]:
 def generate_privacy_attrs_node(state: GraphState) -> Dict[str, Any]:
     messages: List[BaseMessage] = [
         SystemMessage(content=system_message),
-        HumanMessage(content=f"""
+        HumanMessage(
+            content=f"""
                     Generate a realistic persona with the following attributes:
                     Age: {state["prompt"].age}
                     City: {state["prompt"].city}
                     Job: {state["prompt"].job}
                     Current Activity: {state["prompt"].activity_state}
                     Make sure to generate a realistic persona with the given attributes.
-                    """),
+                    """
+        ),
     ]
     persona_generator = PersonaGenerator()
     attrs: PrivacyAttributes = persona_generator.generate(messages)
-    behavioral_spec: BehaviorSpec = persona_generator.infer_behavior_spec(state["prompt"])
-    behavioral_params: BehavioralParameters = persona_generator.derive_behavioral_parameters(behavioral_spec)
+    behavioral_spec: BehaviorSpec = persona_generator.infer_behavior_spec(
+        state["prompt"]
+    )
+    behavioral_params: BehavioralParameters = (
+        persona_generator.derive_behavioral_parameters(behavioral_spec)
+    )
 
-    return {"demographics": attrs, "behavior_spec": behavioral_spec, "parameters": behavioral_params}
-
+    return {
+        "demographics": attrs,
+        "behavior_spec": behavioral_spec,
+        "parameters": behavioral_params,
+    }
 
 
 # 2) Generate traces independently
@@ -634,10 +712,12 @@ def package_persona_node(state: GraphState) -> Dict[str, Any]:
     attrs = _ensure_privacy_attrs(state["demographics"])
     traces = _ensure_traces(state["traces"])
 
-    package = PersonaPackage(profile=attrs, 
-                             behavior_spec=state["behavior_spec"], 
-                             parameters=state["parameters"], 
-                             traces=traces)
+    package = PersonaPackage(
+        profile=attrs,
+        behavior_spec=state["behavior_spec"],
+        parameters=state["parameters"],
+        traces=traces,
+    )
 
     return {"persona_package": package}
 
@@ -763,8 +843,8 @@ app = workflow.compile()
 #     prompt: str = "Sarah, software engineer in San Francisco, jogging in Golden Gate Park."
 #     app.invoke(cast(GraphState, {"prompt": prompt}))
 
-    # prompt_2 = (
-    #     "John who is a writer. "
-    #     "He is currently sitting in a cafe in New York City, working on his laptop."
-    # )
-    # app.invoke({"prompt": prompt_2})
+# prompt_2 = (
+#     "John who is a writer. "
+#     "He is currently sitting in a cafe in New York City, working on his laptop."
+# )
+# app.invoke({"prompt": prompt_2})
