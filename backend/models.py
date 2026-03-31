@@ -1,6 +1,6 @@
-
 from typing import Any, Dict, Literal, cast
 from pydantic import BaseModel, Field
+
 
 class UserInput(BaseModel):
     age: int
@@ -19,10 +19,35 @@ class UserInput(BaseModel):
     primary_use: Literal["social", "video_news", "mixed"]
     usage_level: Literal["light", "typical", "heavy"]
 
+
+class UserProfileInput(BaseModel):
+    age: int
+    city: str
+    job: str
+    chronotype_self_report: Literal["morning", "neutral", "night"]
+    phone_style: Literal["quick_checks", "mixed", "long_sessions"]
+    primary_use: Literal["social", "video_news", "mixed"]
+    usage_level: Literal["light", "typical", "heavy"]
+    activity_level: Literal["low", "moderate", "high"]
+    commute_frequency: Literal["rare", "sometimes", "frequent"]
+    routine_regularity: Literal["low", "medium", "high"]
+
+
+class SimulationContext(BaseModel):
+    context: Literal["work", "home", "commuting", "waiting", "other"]
+    activity_state: Literal["stationary", "active"]
+    day_type: Literal["weekday", "weekend"]
+    hour_of_day: int
+
+
 class BehaviorSpec(BaseModel):
-    chronotype: float  # inferred from chronotype_self_report + hour_of_day patterns later
+    chronotype: (
+        float  # inferred from chronotype_self_report + hour_of_day patterns later
+    )
     attentional_granularity: float  # from phone_style
-    baseline_intensity: float  # how heavy user is (screen time + pickups); start with prior
+    baseline_intensity: (
+        float  # how heavy user is (screen time + pickups); start with prior
+    )
     engagement_social_weight: float  # from primary_use
 
     mobility_radius: float  # from context/activity + later calibrated by GPS
@@ -31,6 +56,7 @@ class BehaviorSpec(BaseModel):
     day_type: Literal["weekday", "weekend"]
     hour_of_day: int
 
+
 class BehavioralParameters(BaseModel):
 
     # --- Global Daily Controls ---
@@ -38,7 +64,7 @@ class BehavioralParameters(BaseModel):
     baseline_pickups_per_hour: float
 
     # --- Temporal Distribution ---
-    temporal_peak_shift: float  
+    temporal_peak_shift: float
     # negative = morning bias, positive = evening bias
 
     late_night_usage_probability: float
@@ -70,7 +96,7 @@ class BehavioralParameters(BaseModel):
     exploit_fraction_target: float
     fragmentation_index_target: float
 
-    
+
 class PrivacyAttributes(BaseModel):
     first_name: str = Field(description="The first name of the persona")
     last_name: str = Field(description="The last name of the persona")
@@ -88,7 +114,9 @@ class PrivacyAttributes(BaseModel):
     education_level: str = Field(
         description="The most suitable education level of the persona, four options: high school diploma, attending college, bachelor's degree, advanced degree"
     )
-    birthday: str = Field(description="The birthday of the persona (Day and Month only)")
+    birthday: str = Field(
+        description="The birthday of the persona (Day and Month only)"
+    )
     job: str = Field(description="The job of the persona")
     income: str = Field(description="The annual income of the persona")
     income_level: str = Field(
@@ -129,17 +157,20 @@ class PrivacyAttributes(BaseModel):
     activity_description: str = Field(
         description=f"A description of the persona's current activity (e.g., 'running', 'sitting', 'commuting', 'sitting at a bar', 'eating', 'sleeping', 'working', 'studying', 'reading', 'watching TV', 'listening to music', 'browsing the internet', 'socializing', 'other' based on activity_state)."
     )
-    
+
+
 class PersonaPackage(BaseModel):
     profile: PrivacyAttributes
     behavior_spec: BehaviorSpec
     parameters: BehavioralParameters
     traces: Dict[str, BaseModel]
-    
+
+
 class Action(BaseModel):
     app: str
     action: str
     args: Dict[str, Any]
+
 
 class ThoughtAction(BaseModel):
     thought: str
