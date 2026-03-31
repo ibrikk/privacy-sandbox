@@ -17,3 +17,7 @@ langgraph
 langgraph-cli
 uuid
 mcp
+streamlit
+plotly
+pandas
+requests

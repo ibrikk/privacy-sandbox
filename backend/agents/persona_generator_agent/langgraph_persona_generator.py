@@ -21,7 +21,7 @@ from models import (
     BehaviorSpec,
     PersonaPackage,
     PrivacyAttributes,
-    UserInput,
+    SimulationRequest,
 )
 
 system_message = f"""
@@ -116,7 +116,7 @@ class PersonaGenerator:
         structured_llm = self.llm.with_structured_output(PrivacyAttributes)
         return structured_llm.invoke(messages)
 
-    def infer_behavior_spec(self, ui: UserInput) -> BehaviorSpec:
+    def infer_behavior_spec(self, ui: UserProfileInput) -> BehaviorSpec:
         # Literature support:
         # Chronotype operationalized via MEQ or time-of-day distribution.
         # Evening types show higher night usage.
@@ -602,7 +602,7 @@ class DrawTraceGenerator:
 
 
 class GraphState(TypedDict):
-    prompt: UserInput
+    prompt: UserProfileInput
     demographics: PrivacyAttributes
     behavior_spec: BehaviorSpec
     parameters: BehavioralParameters

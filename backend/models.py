@@ -1,23 +1,53 @@
-from typing import Any, Dict, Literal, cast
+from typing import Any, Dict, Literal, Optional
 from pydantic import BaseModel, Field
 
 
-class UserInput(BaseModel):
+class SimulationRequest(BaseModel):
+    """
+    Request model for persona generation API.
+    Comes from frontend survey submission.
+    """
+
+    # Demographics
     age: int
     city: str
     job: str
 
-    # right-now state (situational)
-    context: Literal["work", "home", "commuting", "waiting", "other"]
-    activity_state: Literal["stationary", "active"]
-    day_type: Literal["weekday", "weekend"]
-    hour_of_day: int  # 0-23 (local)
-
-    # simple preferences (user-understandable)
+    # Behavioral dimensions (from survey)
     chronotype_self_report: Literal["morning", "neutral", "night"]
     phone_style: Literal["quick_checks", "mixed", "long_sessions"]
     primary_use: Literal["social", "video_news", "mixed"]
     usage_level: Literal["light", "typical", "heavy"]
+    activity_level: Literal["low", "moderate", "high"]
+    commute_frequency: Literal["rare", "sometimes", "frequent"]
+    routine_regularity: Literal["low", "medium", "high"]
+
+    # Optional context for immediate simulation
+    context: Optional[Literal["work", "home", "commuting", "waiting", "other"]] = "home"
+    day_type: Optional[Literal["weekday", "weekend"]] = "weekday"
+    hour_of_day: Optional[int] = 12
+
+    # Execution options
+    run_on_device: bool = False
+    max_steps: int = 10
+
+
+class SimulationResponse(BaseModel):
+    """
+    Response model with generated persona and artifacts.
+    """
+
+    persona_id: str
+    save_dir: str
+    persona_path: str
+
+    # For visualization
+    behavior_spec: dict
+    parameters: dict
+    schedule_summary: Optional[dict] = None
+
+    # Metrics (if executed)
+    execution_metrics: Optional[dict] = None
 
 
 class UserProfileInput(BaseModel):
