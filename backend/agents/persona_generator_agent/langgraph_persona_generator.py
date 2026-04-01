@@ -22,6 +22,7 @@ from models import (
     PersonaPackage,
     PrivacyAttributes,
     SimulationRequest,
+    UserProfileInput,
 )
 
 system_message = f"""
