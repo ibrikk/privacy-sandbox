@@ -1066,7 +1066,6 @@ def render_survey_page():
     """Render the survey input form."""
 
     st.markdown("### Complete the survey below to generate your persona")
-    st.markdown("This survey mirrors our Prolific study questionnaire (27 questions).")
 
     # Progress indicator
     st.progress(0, text="Fill out all sections below")
