@@ -7,6 +7,7 @@ Supports both local SQLite and Turso (libSQL) for serverless deployment.
 
 import json
 import os
+import secrets
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -187,7 +188,7 @@ async def save_persona(
     Returns:
         Short persona ID for easy sharing (8 characters).
     """
-    persona_id = str(uuid.uuid4())[:8]
+    persona_id = secrets.token_urlsafe(24)
 
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.execute(
@@ -463,3 +464,16 @@ async def import_personas(personas: List[dict]) -> int:
         await db.commit()
 
     return count
+
+
+async def delete_all_personas() -> int:
+    """
+    Delete all personas from the database.
+
+    Returns:
+        Number of rows deleted.
+    """
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        cursor = await db.execute("DELETE FROM personas")
+        await db.commit()
+        return cursor.rowcount if cursor.rowcount is not None else 0

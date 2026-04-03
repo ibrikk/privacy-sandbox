@@ -17,7 +17,7 @@ from typing import Optional, List, Dict, Any
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -31,6 +31,7 @@ from database import (
     list_personas,
     get_stats,
     export_all_personas,
+    delete_all_personas,
 )
 
 # Import our models
@@ -366,28 +367,54 @@ async def get_persona_endpoint(persona_id: str):
     return persona
 
 
+ADMIN_API_KEY = os.getenv("ADMIN_API_KEY")
+
+
+async def require_admin(x_api_key: str | None = Header(default=None)):
+    if not ADMIN_API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="ADMIN_API_KEY is not configured on the server",
+        )
+
+    if x_api_key != ADMIN_API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized",
+        )
+
+    return True
+
+
 @app.get("/personas", tags=["Personas"])
 async def list_personas_endpoint(
     limit: int = 20,
     city: Optional[str] = None,
     occupation: Optional[str] = None,
+    _: bool = Depends(require_admin),
 ):
-    """List recent personas."""
     personas = await list_personas(limit=limit, city=city, occupation=occupation)
     return {"personas": personas}
 
 
 @app.get("/stats", tags=["System"])
-async def get_stats_endpoint():
-    """Get database statistics."""
+async def get_stats_endpoint(_: bool = Depends(require_admin)):
     return await get_stats()
 
 
 @app.get("/export", tags=["System"])
-async def export_endpoint():
-    """Export all personas for backup."""
+async def export_endpoint(_: bool = Depends(require_admin)):
     personas = await export_all_personas()
     return {"count": len(personas), "personas": personas}
+
+
+@app.delete("/personas", tags=["Personas"])
+async def delete_all_personas_endpoint(_: bool = Depends(require_admin)):
+    deleted = await delete_all_personas()
+    return {
+        "message": "All personas deleted",
+        "deleted_count": deleted,
+    }
 
 
 # ============================================================

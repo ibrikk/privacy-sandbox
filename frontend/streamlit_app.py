@@ -280,20 +280,6 @@ def fetch_persona_by_id(persona_id: str) -> Optional[dict]:
         return None
 
 
-def fetch_recent_personas(limit: int = 10) -> List[dict]:
-    """Fetch list of recent personas."""
-    try:
-        response = requests.get(
-            f"{API_URL}/personas", params={"limit": limit}, timeout=10
-        )
-        if response.status_code == 200:
-            data = response.json()
-            return data.get("personas", [])
-        return []
-    except:
-        return []
-
-
 def generate_persona_api(payload: dict) -> Optional[dict]:
     """Call the generate endpoint."""
     try:
@@ -429,33 +415,6 @@ def render_sidebar():
 
     st.sidebar.divider()
 
-    # ========== RECENT PERSONAS ==========
-    st.sidebar.subheader("📋 Recent Personas")
-
-    recent = fetch_recent_personas(limit=8)
-
-    if recent:
-        for p in recent:
-            pid = p.get("persona_id", "")
-            city = p.get("city", "Unknown")
-            occupation = p.get("occupation", "")
-            label = f"{city}"
-            if occupation:
-                label += f" - {occupation[:15]}"
-
-            if st.sidebar.button(
-                f"📄 {label}",
-                key=f"recent_{pid}",
-                use_container_width=True,
-                help=f"ID: {pid}",
-            ):
-                st.query_params["id"] = pid
-                st.rerun()
-    else:
-        st.sidebar.caption("No personas generated yet")
-
-    st.sidebar.divider()
-
     # ========== NAVIGATION ==========
     st.sidebar.subheader("🧭 Navigation")
 
@@ -524,17 +483,30 @@ def render_dimensions_radar(dimensions: dict) -> go.Figure:
     )
 
     fig.update_layout(
+        autosize=True,
         polar=dict(
+            bgcolor="white",
             radialaxis=dict(
                 visible=True,
                 range=[0, 1],
                 tickvals=[0.25, 0.5, 0.75, 1.0],
                 ticktext=["0.25", "0.5", "0.75", "1.0"],
+                tickfont=dict(color="black", size=11),
+                gridcolor="rgba(0, 0, 0, 0.18)",
+                linecolor="rgba(0, 0, 0, 0.25)",
             ),
+            angularaxis=dict(
+                tickfont=dict(color="white", size=14),
+                linecolor="rgba(0, 0, 0, 0.2)",
+                gridcolor="rgba(0, 0, 0, 0.18)",
+                rotation=0,
+                direction="clockwise",
+            ),
+            domain=dict(x=[0.08, 0.92], y=[0.12, 0.98]),
         ),
         showlegend=False,
-        height=450,
-        margin=dict(t=30, b=30, l=80, r=80),
+        height=560,
+        margin=dict(t=20, b=55, l=40, r=40),
     )
 
     return fig
@@ -1147,7 +1119,7 @@ def render_results_page():
 
     # ----- TAB 1: Dimensions -----
     with tab1:
-        col1, col2 = st.columns([1, 1])
+        col1, col2 = st.columns([1.4, 0.6])
 
         with col1:
             st.subheader("Behavioral Profile")
