@@ -21,3 +21,4 @@ streamlit
 plotly
 pandas
 requests
+aiosqlite

@@ -59,6 +59,11 @@ st.markdown(
     .stProgress > div > div > div > div {
         background-color: #1f77b4;
     }
+    .sidebar-section {
+        padding: 0.5rem 0;
+        border-bottom: 1px solid #e0e0e0;
+        margin-bottom: 0.5rem;
+    }
 </style>
 """,
     unsafe_allow_html=True,
@@ -76,6 +81,9 @@ if "survey_data" not in st.session_state:
 
 if "generation_result" not in st.session_state:
     st.session_state.generation_result = None
+
+if "view_mode" not in st.session_state:
+    st.session_state.view_mode = "survey"  # "survey" or "results"
 
 # ============================================================
 # CONSTANTS (Match Enums in models.py)
@@ -240,6 +248,79 @@ EXPLORATION_OPTIONS = {
 }
 
 # ============================================================
+# API FUNCTIONS
+# ============================================================
+
+
+def api_health_check() -> bool:
+    """Check if API is available."""
+    try:
+        response = requests.get(f"{API_URL}/health", timeout=5)
+        return response.status_code == 200
+    except:
+        return False
+
+
+def fetch_persona_by_id(persona_id: str) -> Optional[dict]:
+    """Fetch a persona by ID from the API."""
+    try:
+        response = requests.get(f"{API_URL}/persona/{persona_id}", timeout=30)
+        if response.status_code == 200:
+            return response.json()
+        elif response.status_code == 404:
+            return None
+        else:
+            st.error(f"API Error: {response.status_code}")
+            return None
+    except requests.exceptions.ConnectionError:
+        st.error("Could not connect to API server")
+        return None
+    except Exception as e:
+        st.error(f"Error fetching persona: {e}")
+        return None
+
+
+def fetch_recent_personas(limit: int = 10) -> List[dict]:
+    """Fetch list of recent personas."""
+    try:
+        response = requests.get(
+            f"{API_URL}/personas", params={"limit": limit}, timeout=10
+        )
+        if response.status_code == 200:
+            data = response.json()
+            return data.get("personas", [])
+        return []
+    except:
+        return []
+
+
+def generate_persona_api(payload: dict) -> Optional[dict]:
+    """Call the generate endpoint."""
+    try:
+        response = requests.post(
+            f"{API_URL}/generate",
+            json=payload,
+            timeout=120,
+        )
+        if response.status_code == 200:
+            return response.json()
+        else:
+            st.error(f"API Error: {response.status_code} - {response.text}")
+            return None
+    except requests.exceptions.ConnectionError:
+        st.error(
+            "❌ Could not connect to the API server. Make sure `server.py` is running on port 8000."
+        )
+        return None
+    except requests.exceptions.Timeout:
+        st.error("❌ Request timed out. The server may be overloaded.")
+        return None
+    except Exception as e:
+        st.error(f"❌ Unexpected error: {str(e)}")
+        return None
+
+
+# ============================================================
 # HELPER FUNCTIONS
 # ============================================================
 
@@ -254,498 +335,147 @@ def multi_select_to_values(display_to_value: dict, selected_displays: list) -> l
     return [display_to_value.get(d, d) for d in selected_displays]
 
 
+def normalize_persona_data(data: dict) -> dict:
+    """
+    Normalize persona data from different sources.
+    The /persona/{id} endpoint returns data nested under 'survey', 'dimensions', etc.
+    The /generate endpoint returns it directly.
+    """
+    # If data has nested structure from /persona/{id}
+    if "survey" in data and "dimensions" in data and "parameters" in data:
+        # Already in the right format
+        return {
+            "persona_id": data.get("persona_id", "unknown"),
+            "dimensions": data.get("dimensions", {}),
+            "parameters": data.get("parameters", {}),
+            "schedule": data.get("schedule"),
+            "survey_summary": {
+                "city": data.get("survey", {}).get("city", "N/A"),
+                "occupation": data.get("survey", {}).get("occupation", "N/A"),
+                "age_range": data.get("survey", {}).get("age_range", "N/A"),
+            },
+        }
+    # Already normalized (from /generate)
+    return data
+
+
 # ============================================================
-# SURVEY SECTIONS
+# SIDEBAR
 # ============================================================
 
 
-def render_section_1_demographics():
-    """Section 1: Demographics (Q1-Q4)"""
+def render_sidebar():
+    """Render the sidebar with navigation and load options."""
 
-    st.markdown(
-        '<p class="section-header">📋 Section 1: Demographics</p>',
-        unsafe_allow_html=True,
+    st.sidebar.title("📱 Persona Generator")
+
+    # API Status
+    api_ok = api_health_check()
+    if api_ok:
+        st.sidebar.success("✅ API Connected", icon="🟢")
+    else:
+        st.sidebar.error("❌ API Offline", icon="🔴")
+        st.sidebar.caption("Start server: `python server.py`")
+
+    st.sidebar.divider()
+
+    # ========== LOAD BY ID SECTION ==========
+    st.sidebar.subheader("🔍 Load Persona by ID")
+
+    # Check URL query params first
+    query_params = st.query_params
+    url_persona_id = query_params.get("id", "")
+
+    persona_id_input = st.sidebar.text_input(
+        "Persona ID",
+        value=url_persona_id,
+        placeholder="e.g., abc123-def456-...",
+        key="sidebar_persona_id",
+        label_visibility="collapsed",
     )
 
-    col1, col2 = st.columns(2)
-
+    col1, col2 = st.sidebar.columns(2)
     with col1:
-        # Q1: Age
-        st.markdown(
-            '<p class="question-text">Q1. How old are you?</p>', unsafe_allow_html=True
-        )
-        age = st.selectbox(
-            "Age range",
-            options=AGE_OPTIONS,
-            key="q1_age",
-            label_visibility="collapsed",
-        )
-
-        # Q2: City
-        st.markdown(
-            '<p class="question-text">Q2. What city do you currently live in?</p>',
-            unsafe_allow_html=True,
-        )
-        city = st.text_input(
-            "City",
-            placeholder="e.g., San Francisco, London, Tokyo",
-            key="q2_city",
-            label_visibility="collapsed",
-        )
-
+        load_clicked = st.button("Load", use_container_width=True, key="load_btn")
     with col2:
-        # Q3: Occupation
-        st.markdown(
-            '<p class="question-text">Q3. What is your current occupation or primary role?</p>',
-            unsafe_allow_html=True,
-        )
-        occupation = st.text_input(
-            "Occupation",
-            placeholder="e.g., Software Engineer, Student, Nurse",
-            key="q3_occupation",
-            label_visibility="collapsed",
-        )
+        clear_clicked = st.button("Clear", use_container_width=True, key="clear_btn")
 
-        # Q4: Area type
-        st.markdown(
-            '<p class="question-text">Q4. How would you describe the area where you live?</p>',
-            unsafe_allow_html=True,
-        )
-        area_type = st.selectbox(
-            "Area type",
-            options=list(AREA_TYPE_OPTIONS.keys()),
-            key="q4_area",
-            label_visibility="collapsed",
-        )
+    # Handle load
+    if load_clicked and persona_id_input:
+        with st.sidebar.status("Loading...", expanded=True):
+            data = fetch_persona_by_id(persona_id_input.strip())
+            if data:
+                st.session_state.generation_result = normalize_persona_data(data)
+                st.session_state.view_mode = "results"
+                # Update URL
+                st.query_params["id"] = persona_id_input.strip()
+                st.rerun()
+            else:
+                st.sidebar.error(f"Persona not found: {persona_id_input[:20]}...")
 
-    return {
-        "age_range": age,
-        "city": city,
-        "occupation": occupation,
-        "area_type": get_selection_value(AREA_TYPE_OPTIONS, area_type),
-    }
+    # Handle clear
+    if clear_clicked:
+        st.session_state.generation_result = None
+        st.session_state.view_mode = "survey"
+        st.query_params.clear()
+        st.rerun()
 
+    # Auto-load from URL on first visit
+    if url_persona_id and st.session_state.generation_result is None:
+        data = fetch_persona_by_id(url_persona_id.strip())
+        if data:
+            st.session_state.generation_result = normalize_persona_data(data)
+            st.session_state.view_mode = "results"
 
-def render_section_2_sleep_chronotype():
-    """Section 2: Sleep & Chronotype (Q5-Q8)"""
+    st.sidebar.divider()
 
-    st.markdown(
-        '<p class="section-header">🌙 Section 2: Sleep & Chronotype</p>',
-        unsafe_allow_html=True,
-    )
+    # ========== RECENT PERSONAS ==========
+    st.sidebar.subheader("📋 Recent Personas")
 
-    col1, col2 = st.columns(2)
+    recent = fetch_recent_personas(limit=8)
 
-    with col1:
-        # Q5: Wake time
-        st.markdown(
-            '<p class="question-text">Q5. On a typical weekday, what time do you usually wake up?</p>',
-            unsafe_allow_html=True,
-        )
-        wake_time = st.selectbox(
-            "Wake time",
-            options=list(WAKE_TIME_OPTIONS.keys()),
-            key="q5_wake",
-            label_visibility="collapsed",
-        )
+    if recent:
+        for p in recent:
+            pid = p.get("persona_id", "")
+            city = p.get("city", "Unknown")
+            occupation = p.get("occupation", "")
+            label = f"{city}"
+            if occupation:
+                label += f" - {occupation[:15]}"
 
-        # Q6: Sleep time
-        st.markdown(
-            '<p class="question-text">Q6. On a typical weekday, what time do you usually go to sleep?</p>',
-            unsafe_allow_html=True,
-        )
-        sleep_time = st.selectbox(
-            "Sleep time",
-            options=list(SLEEP_TIME_OPTIONS.keys()),
-            key="q6_sleep",
-            label_visibility="collapsed",
-        )
+            if st.sidebar.button(
+                f"📄 {label}",
+                key=f"recent_{pid}",
+                use_container_width=True,
+                help=f"ID: {pid}",
+            ):
+                st.query_params["id"] = pid
+                st.rerun()
+    else:
+        st.sidebar.caption("No personas generated yet")
 
-    with col2:
-        # Q7: Chronotype self-report
-        st.markdown(
-            '<p class="question-text">Q7. Would you describe yourself as a "morning person" or an "evening person"?</p>',
-            unsafe_allow_html=True,
-        )
-        chronotype = st.selectbox(
-            "Chronotype",
-            options=list(CHRONOTYPE_OPTIONS.keys()),
-            key="q7_chronotype",
-            label_visibility="collapsed",
-        )
+    st.sidebar.divider()
 
-        # Q8: Peak usage time
-        st.markdown(
-            '<p class="question-text">Q8. When do you typically use your phone the most?</p>',
-            unsafe_allow_html=True,
-        )
-        peak_usage = st.selectbox(
-            "Peak usage",
-            options=list(PEAK_USAGE_OPTIONS.keys()),
-            key="q8_peak",
-            label_visibility="collapsed",
-        )
+    # ========== NAVIGATION ==========
+    st.sidebar.subheader("🧭 Navigation")
 
-    return {
-        "wake_time": get_selection_value(WAKE_TIME_OPTIONS, wake_time),
-        "sleep_time": get_selection_value(SLEEP_TIME_OPTIONS, sleep_time),
-        "chronotype_self_report": get_selection_value(CHRONOTYPE_OPTIONS, chronotype),
-        "peak_usage_time": get_selection_value(PEAK_USAGE_OPTIONS, peak_usage),
-    }
+    if st.sidebar.button(
+        "📝 New Survey", use_container_width=True, type="secondary", key="nav_survey"
+    ):
+        st.session_state.view_mode = "survey"
+        st.session_state.generation_result = None
+        st.query_params.clear()
+        st.rerun()
 
-
-def render_section_3_daily_structure():
-    """Section 3: Daily Structure (Q9-Q14)"""
-
-    st.markdown(
-        '<p class="section-header">📅 Section 3: Daily Structure</p>',
-        unsafe_allow_html=True,
-    )
-
-    # Q9: Routine structure
-    st.markdown(
-        '<p class="question-text">Q9. How would you describe your typical daily routine?</p>',
-        unsafe_allow_html=True,
-    )
-    routine = st.selectbox(
-        "Routine",
-        options=list(ROUTINE_OPTIONS.keys()),
-        key="q9_routine",
-        label_visibility="collapsed",
-    )
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        # Q10: Places visited
-        st.markdown(
-            '<p class="question-text">Q10. On a typical day, how many different places do you visit?</p>',
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            '<p class="help-text">Include home, work, stores, gym, etc.</p>',
-            unsafe_allow_html=True,
-        )
-        places = st.slider(
-            "Places",
-            min_value=1,
-            max_value=6,
-            value=3,
-            key="q10_places",
-            label_visibility="collapsed",
-            help="1 = stay home only, 6+ = many locations",
-        )
-
-        # Q11: Commute days
-        st.markdown(
-            '<p class="question-text">Q11. How many days per week do you commute to a workplace or school?</p>',
-            unsafe_allow_html=True,
-        )
-        commute_days = st.selectbox(
-            "Commute days",
-            options=list(COMMUTE_DAYS_OPTIONS.keys()),
-            key="q11_commute_days",
-            label_visibility="collapsed",
-        )
-
-        # Q12: Commute mode
-        st.markdown(
-            '<p class="question-text">Q12. What is your primary mode of transportation for commuting?</p>',
-            unsafe_allow_html=True,
-        )
-        commute_mode = st.selectbox(
-            "Commute mode",
-            options=list(COMMUTE_MODE_OPTIONS.keys()),
-            key="q12_commute_mode",
-            label_visibility="collapsed",
-        )
-
-    with col2:
-        # Q13: Physical activity
-        st.markdown(
-            '<p class="question-text">Q13. How many days per week do you exercise or do physical activity?</p>',
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            '<p class="help-text">Include gym, sports, running, yoga, etc.</p>',
-            unsafe_allow_html=True,
-        )
-        physical_activity = st.selectbox(
-            "Physical activity",
-            options=list(PHYSICAL_ACTIVITY_OPTIONS.keys()),
-            key="q13_activity",
-            label_visibility="collapsed",
-        )
-
-        # Q14: Commute time
-        st.markdown(
-            '<p class="question-text">Q14. How much total time do you typically spend traveling/moving between places each day?</p>',
-            unsafe_allow_html=True,
-        )
-        commute_time = st.selectbox(
-            "Commute time",
-            options=list(COMMUTE_TIME_OPTIONS.keys()),
-            key="q14_commute_time",
-            label_visibility="collapsed",
-        )
-
-    return {
-        "routine_structure": get_selection_value(ROUTINE_OPTIONS, routine),
-        "places_visited_daily": places,
-        "commute_days": get_selection_value(COMMUTE_DAYS_OPTIONS, commute_days),
-        "commute_mode": get_selection_value(COMMUTE_MODE_OPTIONS, commute_mode),
-        "physical_activity_days": get_selection_value(
-            PHYSICAL_ACTIVITY_OPTIONS, physical_activity
-        ),
-        "commute_time": get_selection_value(COMMUTE_TIME_OPTIONS, commute_time),
-    }
-
-
-def render_section_4_phone_usage():
-    """Section 4: Phone Usage Patterns (Q15-Q20)"""
-
-    st.markdown(
-        '<p class="section-header">📱 Section 4: Phone Usage Patterns</p>',
-        unsafe_allow_html=True,
-    )
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        # Q15: Screen time
-        st.markdown(
-            '<p class="question-text">Q15. On a typical day, how much total time do you spend on your smartphone?</p>',
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            '<p class="help-text">Check your screen time settings if unsure.</p>',
-            unsafe_allow_html=True,
-        )
-        screen_time = st.selectbox(
-            "Screen time",
-            options=list(SCREEN_TIME_OPTIONS.keys()),
-            key="q15_screen_time",
-            label_visibility="collapsed",
-        )
-
-        # Q16: Checking frequency
-        st.markdown(
-            '<p class="question-text">Q16. How often do you check your phone (unlock or glance at notifications)?</p>',
-            unsafe_allow_html=True,
-        )
-        checking_freq = st.selectbox(
-            "Checking frequency",
-            options=list(CHECKING_FREQUENCY_OPTIONS.keys()),
-            key="q16_checking",
-            label_visibility="collapsed",
-        )
-
-        # Q17: Session type
-        st.markdown(
-            '<p class="question-text">Q17. Which best describes your typical phone sessions?</p>',
-            unsafe_allow_html=True,
-        )
-        session_type = st.selectbox(
-            "Session type",
-            options=list(SESSION_TYPE_OPTIONS.keys()),
-            key="q17_session",
-            label_visibility="collapsed",
-        )
-
-    with col2:
-        # Q18: Glance frequency
-        st.markdown(
-            '<p class="question-text">Q18. How often do you quickly check your phone and put it away without unlocking?</p>',
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            '<p class="help-text">e.g., checking time, glancing at notification</p>',
-            unsafe_allow_html=True,
-        )
-        glance_freq = st.selectbox(
-            "Glance frequency",
-            options=list(GLANCE_FREQUENCY_OPTIONS.keys()),
-            key="q18_glance",
-            label_visibility="collapsed",
-        )
-
-        # Q19: Work restriction
-        st.markdown(
-            '<p class="question-text">Q19. When you\'re at work or school, how do you typically use your phone?</p>',
-            unsafe_allow_html=True,
-        )
-        work_restriction = st.selectbox(
-            "Work restriction",
-            options=list(WORK_RESTRICTION_OPTIONS.keys()),
-            key="q19_work",
-            label_visibility="collapsed",
-        )
-
-        # Q20: Evening change
-        st.markdown(
-            '<p class="question-text">Q20. In the evening at home, are your phone sessions typically...</p>',
-            unsafe_allow_html=True,
-        )
-        evening_change = st.selectbox(
-            "Evening change",
-            options=list(EVENING_CHANGE_OPTIONS.keys()),
-            key="q20_evening",
-            label_visibility="collapsed",
-        )
-
-    return {
-        "daily_screen_time": get_selection_value(SCREEN_TIME_OPTIONS, screen_time),
-        "checking_frequency": get_selection_value(
-            CHECKING_FREQUENCY_OPTIONS, checking_freq
-        ),
-        "session_type": get_selection_value(SESSION_TYPE_OPTIONS, session_type),
-        "glance_frequency": get_selection_value(GLANCE_FREQUENCY_OPTIONS, glance_freq),
-        "work_phone_restriction": get_selection_value(
-            WORK_RESTRICTION_OPTIONS, work_restriction
-        ),
-        "evening_session_change": get_selection_value(
-            EVENING_CHANGE_OPTIONS, evening_change
-        ),
-    }
-
-
-def render_section_5_app_preferences():
-    """Section 5: App & Content Preferences (Q21-Q25)"""
-
-    st.markdown(
-        '<p class="section-header">📲 Section 5: App & Content Preferences</p>',
-        unsafe_allow_html=True,
-    )
-
-    # Q21: Evening activities increase
-    st.markdown(
-        '<p class="question-text">Q21. Which activities do you do MORE in the evening compared to daytime?</p>',
-        unsafe_allow_html=True,
-    )
-    st.markdown('<p class="help-text">Select up to 3</p>', unsafe_allow_html=True)
-    evening_activities = st.multiselect(
-        "Evening activities",
-        options=list(APP_CATEGORY_OPTIONS.keys()),
-        max_selections=3,
-        key="q21_evening_activities",
-        label_visibility="collapsed",
-    )
-
-    # Q22: Usage reasons
-    st.markdown(
-        '<p class="question-text">Q22. What are your most common reasons for using your phone?</p>',
-        unsafe_allow_html=True,
-    )
-    st.markdown('<p class="help-text">Select up to 3</p>', unsafe_allow_html=True)
-    usage_reasons = st.multiselect(
-        "Usage reasons",
-        options=list(USAGE_REASON_OPTIONS.keys()),
-        max_selections=3,
-        key="q22_reasons",
-        label_visibility="collapsed",
-    )
-
-    # Q23: Commute activities
-    st.markdown(
-        '<p class="question-text">Q23. What do you typically do on your phone during commute or travel?</p>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        '<p class="help-text">Select up to 3. Skip if you don\'t commute.</p>',
-        unsafe_allow_html=True,
-    )
-    commute_activities = st.multiselect(
-        "Commute activities",
-        options=list(APP_CATEGORY_OPTIONS.keys()),
-        max_selections=3,
-        key="q23_commute",
-        label_visibility="collapsed",
-    )
-
-    # Q24: Most used categories
-    st.markdown(
-        '<p class="question-text">Q24. Which app categories do you use most frequently?</p>',
-        unsafe_allow_html=True,
-    )
-    st.markdown('<p class="help-text">Select up to 5</p>', unsafe_allow_html=True)
-    most_used = st.multiselect(
-        "Most used",
-        options=list(APP_CATEGORY_OPTIONS.keys()),
-        max_selections=5,
-        key="q24_most_used",
-        label_visibility="collapsed",
-    )
-
-    # Q25: Exploration style
-    st.markdown(
-        '<p class="question-text">Q25. When it comes to apps and content, which describes you best?</p>',
-        unsafe_allow_html=True,
-    )
-    exploration = st.selectbox(
-        "Exploration",
-        options=list(EXPLORATION_OPTIONS.keys()),
-        key="q25_exploration",
-        label_visibility="collapsed",
-    )
-
-    return {
-        "evening_activities_increase": multi_select_to_values(
-            APP_CATEGORY_OPTIONS, evening_activities
-        ),
-        "usage_reasons": multi_select_to_values(USAGE_REASON_OPTIONS, usage_reasons),
-        "commute_activities": multi_select_to_values(
-            APP_CATEGORY_OPTIONS, commute_activities
-        ),
-        "most_used_categories": multi_select_to_values(APP_CATEGORY_OPTIONS, most_used),
-        "exploration_style": get_selection_value(EXPLORATION_OPTIONS, exploration),
-    }
-
-
-def render_section_6_optional():
-    """Section 6: Optional Details (Q26-Q27)"""
-
-    st.markdown(
-        '<p class="section-header">✨ Section 6: Additional Details (Optional)</p>',
-        unsafe_allow_html=True,
-    )
-
-    # Q26: Top apps
-    st.markdown(
-        '<p class="question-text">Q26. What are your top 3 most-used apps?</p>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        '<p class="help-text">List them in order of usage (most used first)</p>',
-        unsafe_allow_html=True,
-    )
-    top_apps = st.text_input(
-        "Top apps",
-        placeholder="e.g., Instagram, WhatsApp, YouTube",
-        key="q26_top_apps",
-        label_visibility="collapsed",
-    )
-
-    # Q27: Important habit
-    st.markdown(
-        '<p class="question-text">Q27. Is there any specific phone habit or pattern that you think is important to capture?</p>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        '<p class="help-text">e.g., "I always check Twitter first thing in the morning" or "I avoid my phone during dinner"</p>',
-        unsafe_allow_html=True,
-    )
-    habit = st.text_area(
-        "Habit",
-        placeholder="Describe any specific habits or patterns...",
-        key="q27_habit",
-        label_visibility="collapsed",
-        height=100,
-    )
-
-    return {
-        "top_apps": top_apps if top_apps else None,
-        "important_habit": habit if habit else None,
-    }
+    if st.session_state.generation_result:
+        if st.sidebar.button(
+            "📊 View Results",
+            use_container_width=True,
+            type="primary",
+            key="nav_results",
+        ):
+            st.session_state.view_mode = "results"
+            st.rerun()
 
 
 # ============================================================
@@ -1043,23 +773,8 @@ def render_schedule_detail_table(schedule: dict) -> pd.DataFrame:
 
 
 # ============================================================
-# MAIN APP
+# SURVEY PAGE
 # ============================================================
-
-
-def main():
-    # Header
-    st.markdown("# 📱 Synthetic Smartphone Persona Generator")
-    # st.markdown(
-    #     "Generate realistic, literature-grounded smartphone user personas from survey responses."
-    # )
-    st.markdown("---")
-
-    # Check if we should show results or survey
-    if st.session_state.generation_result is not None:
-        render_results_page()
-    else:
-        render_survey_page()
 
 
 def render_survey_page():
@@ -1103,7 +818,7 @@ def render_survey_page():
                 label_visibility="collapsed",
             )
 
-            st.markdown("**Q4. Which best describes the are you live in?**")
+            st.markdown("**Q4. Which best describes the area you live in?**")
             area_type = st.selectbox(
                 "Area",
                 list(AREA_TYPE_OPTIONS.keys()),
@@ -1155,60 +870,53 @@ def render_survey_page():
 
         # ========== SECTION 3: Daily Structure ==========
         st.markdown(
-            '<p class="section-header">📅 Section 3: Daily Structure</p>',
+            '<p class="section-header">🏠 Section 3: Daily Structure</p>',
             unsafe_allow_html=True,
         )
 
-        st.markdown("**Q9. How would you describe your typical daily routine?**")
-        routine = st.selectbox(
-            "Routine",
-            list(ROUTINE_OPTIONS.keys()),
-            key="routine",
-            label_visibility="collapsed",
-        )
-
-        col1, col2, col3 = st.columns(3)
+        col1, col2 = st.columns(2)
 
         with col1:
-            st.markdown(
-                "**Q10. How many different places do you usually spend meaningful time in?**"
-            )
-            st.caption("Include home, work, stores, gym, etc.")
-            places = st.slider(
-                "Places", 1, 6, 3, key="places", label_visibility="collapsed"
+            st.markdown("**Q9. How structured is your typical weekday?**")
+            routine = st.selectbox(
+                "Routine",
+                list(ROUTINE_OPTIONS.keys()),
+                key="routine",
+                label_visibility="collapsed",
             )
 
-            st.markdown("**Q11. Days per week you commute?**")
+            st.markdown(
+                "**Q10. How many days per week do you commute to work/school?**"
+            )
             commute_days = st.selectbox(
-                "CommuteDays",
+                "Commute Days",
                 list(COMMUTE_DAYS_OPTIONS.keys()),
                 key="commute_days",
                 label_visibility="collapsed",
             )
 
-        with col2:
-            st.markdown("**Q12. Primary commute mode?**")
+            st.markdown("**Q11. What is your primary mode of commuting?**")
             commute_mode = st.selectbox(
-                "CommuteMode",
+                "Commute Mode",
                 list(COMMUTE_MODE_OPTIONS.keys()),
                 key="commute_mode",
                 label_visibility="collapsed",
             )
 
-            st.markdown("**Q13. Days per week you exercise?**")
-            physical_activity = st.selectbox(
-                "Activity",
-                list(PHYSICAL_ACTIVITY_OPTIONS.keys()),
-                key="activity",
+        with col2:
+            st.markdown("**Q12. How much time do you spend commuting daily (total)?**")
+            commute_time = st.selectbox(
+                "Commute Time",
+                list(COMMUTE_TIME_OPTIONS.keys()),
+                key="commute_time",
                 label_visibility="collapsed",
             )
 
-        with col3:
-            st.markdown("**Q14. Daily travel time?**")
-            commute_time = st.selectbox(
-                "CommuteTime",
-                list(COMMUTE_TIME_OPTIONS.keys()),
-                key="commute_time",
+            st.markdown("**Q13. How many days per week do you do physical exercise?**")
+            physical_activity = st.selectbox(
+                "Physical Activity",
+                list(PHYSICAL_ACTIVITY_OPTIONS.keys()),
+                key="physical_activity",
                 label_visibility="collapsed",
             )
 
@@ -1221,474 +929,326 @@ def render_survey_page():
         col1, col2 = st.columns(2)
 
         with col1:
-            st.markdown("**Q15. Total daily phone screen time?**")
-            st.caption("Check your phone's screen time settings if unsure")
+            st.markdown("**Q14. How much time do you spend on your phone daily?**")
             screen_time = st.selectbox(
-                "ScreenTime",
+                "Screen Time",
                 list(SCREEN_TIME_OPTIONS.keys()),
                 key="screen_time",
                 label_visibility="collapsed",
             )
 
-            st.markdown("**Q16. How often do you check your phone?**")
-            checking_freq = st.selectbox(
-                "Checking",
+            st.markdown("**Q15. How often do you check your phone?**")
+            checking_frequency = st.selectbox(
+                "Checking Frequency",
                 list(CHECKING_FREQUENCY_OPTIONS.keys()),
-                key="checking",
+                key="checking_freq",
                 label_visibility="collapsed",
             )
 
-            st.markdown("**Q17. Typical phone session length?**")
+            st.markdown("**Q16. What best describes your typical phone sessions?**")
             session_type = st.selectbox(
-                "Session",
+                "Session Type",
                 list(SESSION_TYPE_OPTIONS.keys()),
-                key="session",
+                key="session_type",
                 label_visibility="collapsed",
             )
 
         with col2:
-            st.markdown("**Q18. How often do you glance without unlocking?**")
-            st.caption("e.g., checking time, glancing at notification")
-            glance_freq = st.selectbox(
-                "Glance",
+            st.markdown(
+                "**Q17. How often do you glance at your phone without unlocking?**"
+            )
+            glance_frequency = st.selectbox(
+                "Glance Frequency",
                 list(GLANCE_FREQUENCY_OPTIONS.keys()),
-                key="glance",
+                key="glance_freq",
                 label_visibility="collapsed",
             )
 
-            st.markdown("**Q19. Phone use at work/school?**")
+            st.markdown("**Q18. How restricted is phone use at your workplace?**")
             work_restriction = st.selectbox(
-                "Work",
+                "Work Restriction",
                 list(WORK_RESTRICTION_OPTIONS.keys()),
-                key="work",
+                key="work_restriction",
                 label_visibility="collapsed",
             )
 
-            st.markdown("**Q20. Evening sessions compared to daytime?**")
+            st.markdown(
+                "**Q19. How do your evening phone sessions compare to daytime?**"
+            )
             evening_change = st.selectbox(
-                "Evening",
+                "Evening Change",
                 list(EVENING_CHANGE_OPTIONS.keys()),
-                key="evening",
+                key="evening_change",
                 label_visibility="collapsed",
             )
 
         # ========== SECTION 5: App Preferences ==========
         st.markdown(
-            '<p class="section-header">📲 Section 5: App & Content Preferences</p>',
+            '<p class="section-header">📲 Section 5: App Preferences</p>',
             unsafe_allow_html=True,
         )
 
         st.markdown(
-            "**Q21. Which activities do you do MORE in the evening?** (select up to 3)"
+            "**Q20. Which types of apps do you use most frequently?** (Select up to 5)"
         )
-        evening_activities = st.multiselect(
-            "EveningAct",
-            list(APP_CATEGORY_OPTIONS.keys()),
-            max_selections=3,
-            key="evening_act",
-            label_visibility="collapsed",
-        )
-
-        st.markdown(
-            "**Q22. Most common reasons for using your phone?** (select up to 3)"
-        )
-        usage_reasons = st.multiselect(
-            "Reasons",
-            list(USAGE_REASON_OPTIONS.keys()),
-            max_selections=3,
-            key="reasons",
-            label_visibility="collapsed",
-        )
-
-        st.markdown(
-            "**Q23. What do you do on your phone during commute?** (select up to 3)"
-        )
-        commute_activities = st.multiselect(
-            "CommuteAct",
-            list(APP_CATEGORY_OPTIONS.keys()),
-            max_selections=3,
-            key="commute_act",
-            label_visibility="collapsed",
-        )
-
-        st.markdown("**Q24. Most frequently used app categories?** (select up to 5)")
-        most_used = st.multiselect(
-            "MostUsed",
+        top_apps = st.multiselect(
+            "Top Apps",
             list(APP_CATEGORY_OPTIONS.keys()),
             max_selections=5,
-            key="most_used",
+            key="top_apps",
             label_visibility="collapsed",
         )
 
-        st.markdown("**Q25. Do you explore new apps or stick to familiar ones?**")
-        exploration = st.selectbox(
-            "Explore",
-            list(EXPLORATION_OPTIONS.keys()),
-            key="explore",
-            label_visibility="collapsed",
-        )
-
-        # ========== SECTION 6: Optional ==========
         st.markdown(
-            '<p class="section-header">✨ Section 6: Additional Details (Optional)</p>',
-            unsafe_allow_html=True,
+            "**Q21. What are your main reasons for using your phone?** (Select up to 5)"
+        )
+        usage_reasons = st.multiselect(
+            "Usage Reasons",
+            list(USAGE_REASON_OPTIONS.keys()),
+            max_selections=5,
+            key="usage_reasons",
+            label_visibility="collapsed",
         )
 
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.markdown("**Q26. What are your top 3 most-used apps?**")
-            top_apps = st.text_input(
-                "TopApps",
-                placeholder="e.g., Instagram, WhatsApp, YouTube, Tiktok",
-                key="top_apps",
-                label_visibility="collapsed",
-            )
-
-        with col2:
-            st.markdown("**Q27. Any specific phone habits to capture?**")
-            important_habit = st.text_area(
-                "Habit",
-                placeholder="e.g., 'I always check Twitter first thing in the morning'",
-                key="habit",
-                height=80,
-                label_visibility="collapsed",
-            )
-
-        # ========== GENERATION OPTIONS ==========
-        st.markdown("---")
-        st.markdown("### Generation Options")
-
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-            generate_schedule = st.checkbox(
-                "Generate 24-hour schedule", value=True, key="gen_schedule"
-            )
-
-        with col2:
-            day_type = st.radio(
-                "Day type", ["weekday", "weekend"], key="day_type", horizontal=True
-            )
-
-        with col3:
-            pass  # Placeholder for future options
+        st.markdown(
+            "**Q22. Do you prefer exploring new content or sticking to what you know?**"
+        )
+        exploration = st.selectbox(
+            "Exploration",
+            list(EXPLORATION_OPTIONS.keys()),
+            key="exploration",
+            label_visibility="collapsed",
+        )
 
         # ========== SUBMIT ==========
         st.markdown("---")
+
         submitted = st.form_submit_button(
-            "Generate Persona", use_container_width=True, type="primary"
+            "🚀 Generate Persona", use_container_width=True, type="primary"
         )
 
         if submitted:
             # Validate required fields
-            if not city or not occupation:
-                st.error("Please fill in city and occupation.")
+            if not city:
+                st.error("Please enter your city.")
                 return
-
-            if len(most_used) == 0:
-                st.error("Please select at least one app category in Q24.")
+            if not occupation:
+                st.error("Please enter your occupation.")
+                return
+            if len(top_apps) == 0:
+                st.error("Please select at least one app category.")
+                return
+            if len(usage_reasons) == 0:
+                st.error("Please select at least one usage reason.")
                 return
 
             # Build payload
             payload = {
-                "survey": {
-                    # Section 1
-                    "age_range": age_range,
-                    "city": city,
-                    "occupation": occupation,
-                    "area_type": get_selection_value(AREA_TYPE_OPTIONS, area_type),
-                    # Section 2
-                    "wake_time": get_selection_value(WAKE_TIME_OPTIONS, wake_time),
-                    "sleep_time": get_selection_value(SLEEP_TIME_OPTIONS, sleep_time),
-                    "chronotype_self_report": get_selection_value(
-                        CHRONOTYPE_OPTIONS, chronotype
-                    ),
-                    "peak_usage_time": get_selection_value(
-                        PEAK_USAGE_OPTIONS, peak_usage
-                    ),
-                    # Section 3
-                    "routine_structure": get_selection_value(ROUTINE_OPTIONS, routine),
-                    "places_visited_daily": places,
-                    "commute_days": get_selection_value(
-                        COMMUTE_DAYS_OPTIONS, commute_days
-                    ),
-                    "commute_mode": get_selection_value(
-                        COMMUTE_MODE_OPTIONS, commute_mode
-                    ),
-                    "physical_activity_days": get_selection_value(
-                        PHYSICAL_ACTIVITY_OPTIONS, physical_activity
-                    ),
-                    "commute_time": get_selection_value(
-                        COMMUTE_TIME_OPTIONS, commute_time
-                    ),
-                    # Section 4
-                    "daily_screen_time": get_selection_value(
-                        SCREEN_TIME_OPTIONS, screen_time
-                    ),
-                    "checking_frequency": get_selection_value(
-                        CHECKING_FREQUENCY_OPTIONS, checking_freq
-                    ),
-                    "session_type": get_selection_value(
-                        SESSION_TYPE_OPTIONS, session_type
-                    ),
-                    "glance_frequency": get_selection_value(
-                        GLANCE_FREQUENCY_OPTIONS, glance_freq
-                    ),
-                    "work_phone_restriction": get_selection_value(
-                        WORK_RESTRICTION_OPTIONS, work_restriction
-                    ),
-                    "evening_session_change": get_selection_value(
-                        EVENING_CHANGE_OPTIONS, evening_change
-                    ),
-                    # Section 5
-                    "evening_activities_increase": multi_select_to_values(
-                        APP_CATEGORY_OPTIONS, evening_activities
-                    ),
-                    "usage_reasons": multi_select_to_values(
-                        USAGE_REASON_OPTIONS, usage_reasons
-                    ),
-                    "commute_activities": multi_select_to_values(
-                        APP_CATEGORY_OPTIONS, commute_activities
-                    ),
-                    "most_used_categories": multi_select_to_values(
-                        APP_CATEGORY_OPTIONS, most_used
-                    ),
-                    "exploration_style": get_selection_value(
-                        EXPLORATION_OPTIONS, exploration
-                    ),
-                    # Section 6 (Optional)
-                    "top_apps": top_apps if top_apps else None,
-                    "important_habit": important_habit if important_habit else None,
-                },
-                "generate_schedule": generate_schedule,
-                "day_type": day_type,
+                "age_range": age_range,
+                "city": city,
+                "occupation": occupation,
+                "area_type": get_selection_value(AREA_TYPE_OPTIONS, area_type),
+                "wake_time": get_selection_value(WAKE_TIME_OPTIONS, wake_time),
+                "sleep_time": get_selection_value(SLEEP_TIME_OPTIONS, sleep_time),
+                "chronotype": get_selection_value(CHRONOTYPE_OPTIONS, chronotype),
+                "peak_usage_time": get_selection_value(PEAK_USAGE_OPTIONS, peak_usage),
+                "routine_level": get_selection_value(ROUTINE_OPTIONS, routine),
+                "commute_days": get_selection_value(COMMUTE_DAYS_OPTIONS, commute_days),
+                "commute_mode": get_selection_value(COMMUTE_MODE_OPTIONS, commute_mode),
+                "commute_time": get_selection_value(COMMUTE_TIME_OPTIONS, commute_time),
+                "physical_activity_days": get_selection_value(
+                    PHYSICAL_ACTIVITY_OPTIONS, physical_activity
+                ),
+                "screen_time": get_selection_value(SCREEN_TIME_OPTIONS, screen_time),
+                "checking_frequency": get_selection_value(
+                    CHECKING_FREQUENCY_OPTIONS, checking_frequency
+                ),
+                "session_type": get_selection_value(SESSION_TYPE_OPTIONS, session_type),
+                "glance_frequency": get_selection_value(
+                    GLANCE_FREQUENCY_OPTIONS, glance_frequency
+                ),
+                "work_phone_restriction": get_selection_value(
+                    WORK_RESTRICTION_OPTIONS, work_restriction
+                ),
+                "evening_usage_change": get_selection_value(
+                    EVENING_CHANGE_OPTIONS, evening_change
+                ),
+                "top_app_categories": multi_select_to_values(
+                    APP_CATEGORY_OPTIONS, top_apps
+                ),
+                "usage_reasons": multi_select_to_values(
+                    USAGE_REASON_OPTIONS, usage_reasons
+                ),
+                "exploration_preference": get_selection_value(
+                    EXPLORATION_OPTIONS, exploration
+                ),
             }
 
-            # Call the API
-            with st.spinner("🔮 Generating persona... This may take a moment."):
-                try:
-                    response = requests.post(
-                        f"{API_URL}/generate",
-                        json=payload,
-                        timeout=120,
-                    )
+            # Call API
+            with st.spinner("🔄 Generating persona... This may take 30-60 seconds."):
+                result = generate_persona_api(payload)
 
-                    if response.status_code == 200:
-                        result = response.json()
-                        st.session_state.generation_result = result
-                        st.rerun()
-                    else:
-                        st.error(f"API Error: {response.status_code} - {response.text}")
+            if result:
+                st.session_state.generation_result = result
+                st.session_state.view_mode = "results"
+                # Update URL with persona ID
+                if "persona_id" in result:
+                    st.query_params["id"] = result["persona_id"]
+                st.success("✅ Persona generated successfully!")
+                st.rerun()
 
-                except requests.exceptions.ConnectionError:
-                    st.error(
-                        "❌ Could not connect to the API server. Make sure `server.py` is running on port 8000."
-                    )
-                except requests.exceptions.Timeout:
-                    st.error("❌ Request timed out. The server may be overloaded.")
-                except Exception as e:
-                    st.error(f"❌ Unexpected error: {str(e)}")
+
+# ============================================================
+# RESULTS PAGE
+# ============================================================
 
 
 def render_results_page():
-    """Render the generated persona results."""
+    """Render the results visualization page."""
 
     result = st.session_state.generation_result
 
-    # Back button
-    if st.button("← Back to Survey", type="secondary"):
-        st.session_state.generation_result = None
-        st.rerun()
-
-    st.markdown("---")
-    st.markdown("## 🎭 Generated Persona")
+    if not result:
+        st.warning("No persona data available. Please generate or load a persona.")
+        if st.button("Go to Survey"):
+            st.session_state.view_mode = "survey"
+            st.rerun()
+        return
 
     # Extract data
     persona_id = result.get("persona_id", "unknown")
     dimensions = result.get("dimensions", {})
     parameters = result.get("parameters", {})
     schedule = result.get("schedule")
+    survey_summary = result.get("survey_summary", {})
 
-    # ========== HEADER INFO ==========
-    col1, col2, col3 = st.columns(3)
+    # ========== HEADER ==========
+    st.markdown(f"## 📊 Persona Results")
 
+    col1, col2, col3 = st.columns([2, 2, 1])
     with col1:
-        st.metric(
-            "Persona ID", persona_id[:8] + "..." if len(persona_id) > 8 else persona_id
-        )
-
+        st.markdown(f"**ID:** `{persona_id}`")
     with col2:
-        st.metric(
-            "Waking Hours",
-            f"{parameters.get('waking_hour_start', 7)}:00 - {parameters.get('waking_hour_end', 23)}:00",
+        city = survey_summary.get("city", parameters.get("city", "N/A"))
+        occupation = survey_summary.get(
+            "occupation", parameters.get("occupation", "N/A")
         )
-
+        st.markdown(f"**{city}** • {occupation}")
     with col3:
-        screen_min = parameters.get("daily_screen_time_minutes", 180)
-        st.metric("Est. Screen Time", f"{screen_min // 60}h {screen_min % 60}m")
+        if st.button("📋 Copy ID"):
+            st.write(f"```{persona_id}```")
 
-    st.markdown("---")
+    st.divider()
 
-    # ========== TABS FOR DIFFERENT VIEWS ==========
+    # ========== TABS ==========
     tab1, tab2, tab3, tab4 = st.tabs(
-        ["📊 Dimensions", "⚙️ Parameters", "📅 Schedule", "📥 Export"]
+        ["🎯 Dimensions", "⚙️ Parameters", "📅 Schedule", "📄 Raw JSON"]
     )
 
-    # ---------- TAB 1: DIMENSIONS ----------
+    # ----- TAB 1: Dimensions -----
     with tab1:
-        st.markdown("### Behavioral Dimensions")
-        st.markdown(
-            "These 8 dimensions characterize the user's behavioral profile (0-1 scale)."
-        )
-
-        col1, col2 = st.columns([2, 1])
+        col1, col2 = st.columns([1, 1])
 
         with col1:
+            st.subheader("Behavioral Profile")
             fig = render_dimensions_radar(dimensions)
             st.plotly_chart(fig, use_container_width=True)
 
         with col2:
-            st.markdown("**Dimension Values:**")
+            st.subheader("Dimension Values")
+            dim_df = pd.DataFrame(
+                [
+                    {
+                        "Dimension": k.replace("_", " ").title(),
+                        "Value": f"{v:.2f}",
+                        "Bar": "█" * int(v * 20) + "░" * (20 - int(v * 20)),
+                    }
+                    for k, v in dimensions.items()
+                ]
+            )
+            st.dataframe(dim_df, hide_index=True, use_container_width=True)
 
-            dimension_labels = {
-                "chronotype_score": ("🌙 Chronotype", "0=morning, 1=evening"),
-                "usage_intensity": ("📱 Usage Intensity", "phone dependency"),
-                "attentional_granularity": (
-                    "🔍 Attentional Granularity",
-                    "short vs long sessions",
-                ),
-                "contextual_sensitivity": (
-                    "🎯 Contextual Sensitivity",
-                    "adapts to context",
-                ),
-                "social_orientation": ("👥 Social Orientation", "social vs solo use"),
-                "mobility_diversity": ("🚗 Mobility Diversity", "travel patterns"),
-                "routine_stability": ("📋 Routine Stability", "consistent schedule"),
-                "novelty_seeking": ("✨ Novelty Seeking", "explores new content"),
-            }
-
-            for key, (label, desc) in dimension_labels.items():
-                val = dimensions.get(key, 0.5)
-                st.markdown(f"**{label}**: `{val:.2f}`")
-                st.caption(desc)
-
-    # ---------- TAB 2: PARAMETERS ----------
+    # ----- TAB 2: Parameters -----
     with tab2:
-        st.markdown("### Simulation Parameters")
-        st.markdown("These parameters can be used to drive the smartphone simulation.")
-
-        col1, col2 = st.columns(2)
+        col1, col2 = st.columns([1, 1])
 
         with col1:
-            st.markdown("#### ⏰ Temporal Parameters")
-
-            temporal_params = {
-                "waking_hour_start": "Wake Hour",
-                "waking_hour_end": "Sleep Hour",
-                "temporal_peak_hour": "Peak Usage Hour",
-                "late_night_probability": "Late Night Probability",
-            }
-
-            for key, label in temporal_params.items():
-                val = parameters.get(key, "N/A")
-                if isinstance(val, float):
-                    st.markdown(f"- **{label}**: `{val:.2f}`")
-                else:
-                    st.markdown(f"- **{label}**: `{val}`")
-
-            st.markdown("#### 📊 Usage Parameters")
-
-            usage_params = {
-                "daily_screen_time_minutes": "Daily Screen Time (min)",
-                "sessions_per_day": "Sessions per Day",
-                "avg_session_duration_seconds": "Avg Session (sec)",
-                "glance_ratio": "Glance Ratio",
-            }
-
-            for key, label in usage_params.items():
-                val = parameters.get(key, "N/A")
-                if isinstance(val, float):
-                    st.markdown(f"- **{label}**: `{val:.1f}`")
-                else:
-                    st.markdown(f"- **{label}**: `{val}`")
-
-        with col2:
-            st.markdown("#### 📱 App Weights")
+            st.subheader("App Category Weights")
             fig = render_app_weights_pie(parameters)
             st.plotly_chart(fig, use_container_width=True)
 
-        # Hourly pattern
-        st.markdown("#### 📈 Predicted Hourly Usage Pattern")
+        with col2:
+            st.subheader("Timing Parameters")
+            timing_data = {
+                "Wake Hour": parameters.get("waking_hour_start", "N/A"),
+                "Sleep Hour": parameters.get("waking_hour_end", "N/A"),
+                "Peak Hour": parameters.get("temporal_peak_hour", "N/A"),
+                "Sessions/Day": parameters.get("sessions_per_day", "N/A"),
+                "Avg Duration (s)": parameters.get(
+                    "avg_session_duration_seconds", "N/A"
+                ),
+                "Late Night Prob": f"{parameters.get('late_night_probability', 0):.2f}",
+            }
+            for k, v in timing_data.items():
+                st.metric(k, v)
+
+        st.subheader("Hourly Usage Pattern")
         fig = render_hourly_usage_pattern(parameters)
         st.plotly_chart(fig, use_container_width=True)
 
-    # ---------- TAB 3: SCHEDULE ----------
+    # ----- TAB 3: Schedule -----
     with tab3:
-        st.markdown("### 24-Hour Schedule")
-
-        if schedule and "segments" in schedule:
-            st.markdown(f"**Day Type**: {schedule.get('day_type', 'weekday').title()}")
-
-            # Timeline visualization
+        if schedule:
+            st.subheader("Daily Timeline")
             fig = render_schedule_timeline(schedule)
             if fig:
                 st.plotly_chart(fig, use_container_width=True)
 
-            # Detail table
-            st.markdown("#### Segment Details")
-
+            st.subheader("Schedule Details")
             df = render_schedule_detail_table(schedule)
             if not df.empty:
-                st.dataframe(df, use_container_width=True, hide_index=True)
-
-            # Summary stats
-            total_sessions = sum(
-                seg.get("expected_sessions", 0) for seg in schedule["segments"]
-            )
-            st.markdown(f"**Total Expected Sessions**: {total_sessions}")
+                st.dataframe(df, hide_index=True, use_container_width=True)
         else:
-            st.info(
-                "No schedule was generated. Check the 'Generate 24-hour schedule' option and try again."
-            )
+            st.info("No schedule data available for this persona.")
 
-    # ---------- TAB 4: EXPORT ----------
+    # ----- TAB 4: Raw JSON -----
     with tab4:
-        st.markdown("### Export Options")
+        st.subheader("Full Response Data")
+        st.json(result)
 
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.markdown("#### 📄 JSON Export")
-            st.markdown("Download the complete persona data as JSON.")
-
-            json_str = json.dumps(result, indent=2)
-            st.download_button(
-                label="📥 Download JSON",
-                data=json_str,
-                file_name=f"persona_{persona_id}.json",
-                mime="application/json",
-            )
-
-        with col2:
-            st.markdown("#### 📋 Copy to Clipboard")
-            st.markdown("Copy the persona ID or full JSON.")
-
-            st.code(persona_id, language=None)
-            st.code(
-                json_str[:500] + "..." if len(json_str) > 500 else json_str,
-                language="json",
-            )
-
-        # Raw JSON viewer
-        st.markdown("#### 🔍 Raw JSON Preview")
-        with st.expander("View Full JSON"):
-            st.json(result)
+        # Download button
+        json_str = json.dumps(result, indent=2)
+        st.download_button(
+            label="📥 Download JSON",
+            data=json_str,
+            file_name=f"persona_{persona_id}.json",
+            mime="application/json",
+        )
 
 
 # ============================================================
-# ENTRY POINT
+# MAIN
 # ============================================================
+
+
+def main():
+    """Main app entry point."""
+
+    # Render sidebar (handles navigation and loading)
+    render_sidebar()
+
+    # Main content area
+    st.markdown(
+        '<h1 class="main-header">📱 Synthetic Persona Generator</h1>',
+        unsafe_allow_html=True,
+    )
+
+    # Route based on view mode
+    if st.session_state.view_mode == "results" and st.session_state.generation_result:
+        render_results_page()
+    else:
+        render_survey_page()
+
 
 if __name__ == "__main__":
     main()

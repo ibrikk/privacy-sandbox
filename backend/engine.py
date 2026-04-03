@@ -14,8 +14,6 @@ import math
 from datetime import time, datetime, timedelta
 from typing import Tuple, List, Optional, Dict, Any, Literal
 
-from click import Option
-
 from models import (
     # Enums
     AgeRange,
