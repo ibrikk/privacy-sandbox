@@ -431,6 +431,41 @@ class BehavioralParameters(BaseModel):
         ge=0, le=1, description="Session fragmentation level"
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_app_weights(cls, data: Any) -> Any:
+        """Auto-normalize app weights before validation."""
+        if isinstance(data, dict):
+            weight_fields = [
+                "weight_social",
+                "weight_messaging",
+                "weight_video",
+                "weight_music",
+                "weight_navigation",
+                "weight_productivity",
+                "weight_news",
+                "weight_games",
+                "weight_shopping",
+            ]
+
+            # Check if all weight fields exist
+            if all(field in data for field in weight_fields):
+                total = sum(data[field] for field in weight_fields)
+
+                # Only normalize if significantly off from 1.0
+                if total > 0 and not (0.99 <= total <= 1.01):
+                    # Normalize all weights
+                    for field in weight_fields:
+                        data[field] = data[field] / total
+
+                    # Fix floating point - adjust the largest weight
+                    new_total = sum(data[field] for field in weight_fields)
+                    if new_total != 1.0:
+                        max_field = max(weight_fields, key=lambda f: data[f])
+                        data[max_field] += 1.0 - new_total
+
+        return data
+
     @model_validator(mode="after")
     def validate_weights_sum(self) -> "BehavioralParameters":
         weights = [

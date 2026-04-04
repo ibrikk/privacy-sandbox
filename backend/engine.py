@@ -1132,18 +1132,41 @@ class ParameterDeriver:
         Source: Survey Q24 (most used categories)
         Formula: Weighted distribution based on ranking
         """
-        weights = {cat: 0.05 for cat in AppCategory}  # Base weight
+        # Only include the 9 categories we actually use in BehavioralParameters
+        USED_CATEGORIES = [
+            AppCategory.SOCIAL_MEDIA,
+            AppCategory.MESSAGING,
+            AppCategory.VIDEO_STREAMING,
+            AppCategory.MUSIC_AUDIO,
+            AppCategory.MAPS_NAVIGATION,
+            AppCategory.PRODUCTIVITY_WORK,
+            AppCategory.NEWS_READING,
+            AppCategory.GAMES,
+            AppCategory.SHOPPING,
+        ]
+
+        # Initialize base weights only for categories we use
+        weights = {cat: 0.05 for cat in USED_CATEGORIES}
 
         # Assign higher weights to reported categories
-        n_categories = len(survey.most_used_categories)
         for i, category in enumerate(survey.most_used_categories):
-            # First choice gets highest weight
-            rank_weight = 0.30 - (i * 0.05)  # 0.30, 0.25, 0.20, 0.15, 0.10
-            weights[category] = max(weights[category], rank_weight)
+            if category in weights:  # Only if it's a category we track
+                # First choice gets highest weight, decreasing by rank
+                rank_weight = 0.30 - (i * 0.05)  # 0.30, 0.25, 0.20, 0.15, 0.10...
+                rank_weight = max(rank_weight, 0.05)  # Floor at base weight
+                weights[category] = max(weights[category], rank_weight)
 
-        # Normalize to sum to 1
+        # Normalize to sum to 1.0
         total = sum(weights.values())
-        weights = {k: v / total for k, v in weights.items()}
+        if total > 0:
+            weights = {k: v / total for k, v in weights.items()}
+        else:
+            # Fallback to equal weights
+            n = len(weights)
+            weights = {k: 1.0 / n for k, v in weights.items()}
+
+        # Force exact sum to 1.0 (fix floating point errors)
+        weights = self._force_weights_sum_to_one(weights)
 
         self.citations.append(
             LiteratureReference(
@@ -1153,6 +1176,32 @@ class ParameterDeriver:
                 notes="Top choices weighted 0.30, 0.25, 0.20, 0.15, 0.10",
             )
         )
+
+        return weights
+
+    def _force_weights_sum_to_one(
+        self, weights: Dict[AppCategory, float]
+    ) -> Dict[AppCategory, float]:
+        """
+        Adjust weights to sum exactly to 1.0, handling floating point errors.
+        """
+        if not weights:
+            return weights
+
+        current_sum = sum(weights.values())
+
+        if current_sum == 0:
+            n = len(weights)
+            return {k: 1.0 / n for k in weights}
+
+        # Normalize
+        weights = {k: v / current_sum for k, v in weights.items()}
+
+        # Fix any remaining floating point error by adjusting the largest weight
+        new_sum = sum(weights.values())
+        if new_sum != 1.0:
+            max_key = max(weights.keys(), key=lambda k: weights[k])  # Fixed!
+            weights[max_key] += 1.0 - new_sum
 
         return weights
 
@@ -2114,7 +2163,8 @@ class SessionPopulator:
         probs = [w / total for w in weights.values()]
 
         categories = list(weights.keys())
-        return self.rng.choice(categories, p=probs)
+        idx = self.rng.choice(len(categories), p=probs)
+        return categories[idx]
 
 
 class BehaviorSimulationEngine:
