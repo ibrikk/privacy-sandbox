@@ -1,9 +1,13 @@
 # models.py - Comprehensive survey-aligned models
 
-from datetime import time, datetime
+from datetime import time, datetime, timezone
+import re
 from typing import List, Optional, Literal, Dict, Any, Tuple
-from pydantic import BaseModel, Field
+from uuid import uuid4
+from pydantic import BaseModel, Field, field_serializer, model_validator
 from enum import Enum
+from pydantic import field_validator
+from requests import session
 
 
 # ============================================================
@@ -190,8 +194,10 @@ class ComprehensiveSurveyInput(BaseModel):
 
     # --- Section 1: Demographics (Q1-Q4) ---
     age_range: AgeRange = Field(description="Q1: Age range")
-    city: str = Field(description="Q2: City of residence")
-    occupation: str = Field(description="Q3: Current occupation or primary role")
+    city: str = Field(min_length=1, description="Q2: City of residence")
+    occupation: str = Field(
+        min_length=1, description="Q3: Current occupation or primary role"
+    )
     area_type: AreaType = Field(description="Q4: Urban/suburban/rural")
 
     # --- Section 2: Sleep & Chronotype (Q5-Q8) ---
@@ -234,7 +240,9 @@ class ComprehensiveSurveyInput(BaseModel):
 
     # --- Section 5: App & Content Preferences (Q21-Q25) ---
     evening_activities_increase: List[AppCategory] = Field(
-        max_length=3, description="Q21: Activities that increase in evening (up to 3)"
+        min_length=1,
+        max_length=3,
+        description="Q21: Activities that increase in evening (1-3 required)",
     )
     usage_reasons: List[UsageReason] = Field(
         max_length=3, description="Q22: Most common reasons for phone use (up to 3)"
@@ -349,7 +357,7 @@ class BehavioralParameters(BaseModel):
 
     # --- Temporal Distribution ---
     waking_hour_start: int = Field(ge=0, le=23, description="Hour of typical wake time")
-    waking_hour_end: int = Field(ge=0, le=23, description="Hour of typical sleep time")
+    sleep_hour: int = Field(ge=0, le=23, description="Hour of typical sleep time")
     temporal_peak_hour: int = Field(ge=0, le=23, description="Hour of peak phone usage")
     late_night_probability: float = Field(
         ge=0, le=1, description="P(usage after midnight)"
@@ -423,6 +431,24 @@ class BehavioralParameters(BaseModel):
         ge=0, le=1, description="Session fragmentation level"
     )
 
+    @model_validator(mode="after")
+    def validate_weights_sum(self) -> "BehavioralParameters":
+        weights = [
+            self.weight_social,
+            self.weight_messaging,
+            self.weight_video,
+            self.weight_music,
+            self.weight_navigation,
+            self.weight_productivity,
+            self.weight_news,
+            self.weight_games,
+            self.weight_shopping,
+        ]
+        total = sum(weights)
+        if not (0.99 <= total <= 1.01):  # Allow small floating point tolerance
+            raise ValueError(f"App weights must sum to 1.0, got {total}")
+        return self
+
 
 # ============================================================
 # SCHEDULE MODELS
@@ -460,14 +486,34 @@ class ContextType(str, Enum):
 class PhoneSession(BaseModel):
     """A single phone usage session within a schedule segment."""
 
-    start_offset_seconds: float = Field(description="Seconds from segment start")
+    session_id: str = Field(
+        default_factory=lambda: str(uuid4()), description="Unique session identifier"
+    )
+    timestamp: datetime = Field(description="Session start time (UTC)")
+
     duration_seconds: float = Field(description="Session duration")
     is_glance: bool = Field(description="Whether this is a quick glance (<15s)")
     app_category: AppCategory = Field(description="Primary app category used")
+    is_user_initiated: bool = Field(
+        default=True, description="User pull vs notification-driven"
+    )
+    context: ContextType = Field(description="Usage context at session time")
+    activity: ActivityType = Field(description="Underlying daily activity")
+    location_label: str = Field(description="e.g. home, work")
+    latitude: Optional[float] = Field(default=None, description="Approximate latitude")
+    longitude: Optional[float] = Field(
+        default=None, description="Approximate longitude"
+    )
 
     # Optional details
     specific_app: Optional[str] = None
-    action_type: Optional[str] = None  # "scroll", "message", "watch", etc.
+
+    @field_validator("timestamp")
+    @classmethod
+    def ensure_timezone(cls, v: datetime) -> datetime:
+        if v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v
 
 
 class ScheduleSegment(BaseModel):
@@ -491,6 +537,12 @@ class ScheduleSegment(BaseModel):
     duration_multiplier: float = Field(default=1.0)
     frequency_multiplier: float = Field(default=1.0)
 
+    @field_serializer("location_coords")
+    def serialize_coords(
+        self, coords: Optional[Tuple[float, float]]
+    ) -> Optional[List[float]]:
+        return list(coords) if coords else None
+
 
 class DailySchedule(BaseModel):
     """Complete 24-hour schedule with all segments and phone sessions."""
@@ -500,6 +552,7 @@ class DailySchedule(BaseModel):
     segments: List[ScheduleSegment] = Field(
         description="Ordered list of daily segments"
     )
+    sessions: List[PhoneSession] = []
 
     # Summary statistics
     total_phone_sessions: int = 0
@@ -509,6 +562,15 @@ class DailySchedule(BaseModel):
     # Validation
     is_valid: bool = True
     validation_notes: List[str] = Field(default_factory=list)
+
+    @field_validator("date")
+    @classmethod
+    def validate_date_format(cls, v: str) -> str:
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", v):
+            raise ValueError("Date must be in YYYY-MM-DD format")
+        # Optionally validate it's a real date
+        datetime.strptime(v, "%Y-%m-%d")
+        return v
 
 
 # ============================================================
