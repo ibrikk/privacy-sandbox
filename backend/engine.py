@@ -156,7 +156,7 @@ class LiteratureConstants:
         ContextType.HOME_NIGHT: 0.70,  # reduced late night
         ContextType.COMMUTE_TRANSIT: 1.20,  # "dead time" increases
         ContextType.COMMUTE_DRIVING: 0.10,  # safety
-        ContextType.COMMUTE_WALKING: 0.25,  # 75% suppression
+        ContextType.COMMUTE_WALKING: 0.06,  # 6% suppression
         ContextType.PUBLIC_PLACE: 1.00,
         ContextType.EXERCISING: 0.08,  # ~92% suppression
         ContextType.SOCIAL_SETTING: 0.75,  # social inhibition
@@ -191,7 +191,7 @@ class LiteratureConstants:
         ActivityType.COMMUTING: 0.40,  # varies by mode
         ActivityType.WORKING: 0.70,  # varies by restriction
         ActivityType.LUNCH_BREAK: 1.00,
-        ActivityType.EXERCISING: 0.08,
+        ActivityType.EXERCISING: 0.02,  # 2% while exercising
         ActivityType.ERRANDS: 0.60,
         ActivityType.HOME_EVENING: 1.20,  # peak usage
         ActivityType.LEISURE: 1.30,
@@ -2521,7 +2521,7 @@ class BehaviorSimulationEngine:
             },
             "parameters": {
                 "waking_hour_start": result["parameters"].waking_hour_start,
-                "waking_hour_end": result["parameters"].waking_hour_end,
+                "sleep_hour": result["parameters"].waking_hour_end,
                 "temporal_peak_hour": result["parameters"].temporal_peak_hour,
                 "total_daily_minutes": result["parameters"].total_daily_minutes,
                 "sessions_per_day": result["parameters"].sessions_per_day,
