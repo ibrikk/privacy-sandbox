@@ -132,34 +132,36 @@ class LiteratureConstants:
     # Source: "Work: β=-36.02; Home: β=+42.53; Work-from-home: β=-59.05"
     # Baseline ~290 sec, so β values represent ~12-20% changes
 
+    # DURATION varies by context (Heitmayer & Lahlou 2021)
+    # Work: β=-36.02; Home: β=+42.53
     CONTEXT_DURATION_MULTIPLIERS = {
-        ContextType.WORK_RESTRICTED: 0.70,  # β=-36 with restriction
-        ContextType.WORK_FREE: 0.90,  # minimal work restriction
-        ContextType.HOME_MORNING: 1.00,  # baseline
+        ContextType.WORK_RESTRICTED: 0.60,  # Shorter sessions at restricted work
+        ContextType.WORK_FREE: 0.85,  # Still somewhat shorter than home
+        ContextType.HOME_MORNING: 1.00,  # Baseline
         ContextType.HOME_EVENING: 1.25,  # β=+42, evening stickiness
-        ContextType.HOME_NIGHT: 1.61,  # RR=1.61 from Roehrick et al.
-        ContextType.COMMUTE_TRANSIT: 1.10,  # can engage on transit
-        ContextType.COMMUTE_DRIVING: 0.15,  # safety constraint
-        ContextType.COMMUTE_WALKING: 0.30,  # 70% suppression
-        ContextType.PUBLIC_PLACE: 0.95,
-        ContextType.EXERCISING: 0.10,  # 90% suppression
-        ContextType.SOCIAL_SETTING: 0.80,  # social presence effect
+        ContextType.HOME_NIGHT: 1.40,  # Even longer late night sessions
+        ContextType.COMMUTE_TRANSIT: 0.90,  # Moderate - can engage but interrupted
+        ContextType.COMMUTE_DRIVING: 0.10,  # Safety - almost no engagement
+        ContextType.COMMUTE_WALKING: 0.25,  # Very short glances only
+        ContextType.PUBLIC_PLACE: 0.95,  # Slightly shorter
+        ContextType.EXERCISING: 0.05,  # Almost nothing
+        ContextType.SOCIAL_SETTING: 0.70,  # Social presence shortens
     }
 
-    # Frequency multipliers - mostly stable per literature
-    # Exception: active movement suppresses, waiting increases
+    # FREQUENCY is relatively INVARIANT (Heitmayer & Lahlou 2021)
+    # Exception: Physical constraints (driving, exercising) suppress completely
     CONTEXT_FREQUENCY_MULTIPLIERS = {
-        ContextType.WORK_RESTRICTED: 0.60,  # workplace norms
-        ContextType.WORK_FREE: 0.90,
-        ContextType.HOME_MORNING: 1.00,
-        ContextType.HOME_EVENING: 1.10,
-        ContextType.HOME_NIGHT: 0.70,  # reduced late night
-        ContextType.COMMUTE_TRANSIT: 1.20,  # "dead time" increases
-        ContextType.COMMUTE_DRIVING: 0.10,  # safety
-        ContextType.COMMUTE_WALKING: 0.06,  # 6% suppression
-        ContextType.PUBLIC_PLACE: 1.00,
-        ContextType.EXERCISING: 0.08,  # ~92% suppression
-        ContextType.SOCIAL_SETTING: 0.75,  # social inhibition
+        ContextType.WORK_RESTRICTED: 0.85,  # Slight reduction, not dramatic
+        ContextType.WORK_FREE: 0.95,  # Nearly baseline
+        ContextType.HOME_MORNING: 1.00,  # Baseline
+        ContextType.HOME_EVENING: 1.05,  # Slight increase
+        ContextType.HOME_NIGHT: 0.80,  # Less frequent but longer
+        ContextType.COMMUTE_TRANSIT: 1.00,  # SAME frequency, different duration
+        ContextType.COMMUTE_DRIVING: 0.05,  # Safety constraint
+        ContextType.COMMUTE_WALKING: 0.15,  # Physical constraint (only ~6% of use while walking)
+        ContextType.PUBLIC_PLACE: 1.00,  # Invariant
+        ContextType.EXERCISING: 0.02,  # Literature: 2% while exercising
+        ContextType.SOCIAL_SETTING: 0.85,  # Social inhibition
     }
 
     # -------------------------------------------------------------------------
@@ -1303,13 +1305,40 @@ class ParameterDeriver:
 
 class ScheduleGenerator:
     """
-        Generates daily schedules with time segments and contexts.
-        Creates a sequence of ScheduleSegments covering 24 hours,
+    Generates daily schedules with time segments and contexts.
+    Creates a sequence of ScheduleSegments covering 24 hours,
     with appropriate activities and contexts based on survey input.
     """
 
     def __init__(self, seed: Optional[int] = None):
         self.rng = np.random.default_rng(seed)
+
+    def _should_commute_today(
+        self,
+        survey: ComprehensiveSurveyInput,
+        day_type: str,
+        context_modifiers: Optional[dict] = None,
+    ) -> bool:
+        """
+        Determine if this specific day includes commuting.
+
+        Grounding: Survey asks about commute DAYS per week, not every day.
+        Must translate frequency to daily probability.
+        """
+        if day_type == "weekend":
+            return False
+
+        if context_modifiers and "commutes_today" in context_modifiers:
+            return context_modifiers["commutes_today"]
+
+        commute_probability = {
+            CommuteDays.ZERO: 0.0,
+            CommuteDays.ONE_TWO: 0.30,
+            CommuteDays.THREE_FOUR: 0.70,
+            CommuteDays.FIVE_PLUS: 0.95,
+        }.get(survey.commute_days, 0.70)
+
+        return self.rng.random() < commute_probability
 
     def _validate_segments(
         self, segments: List[ScheduleSegment]
@@ -1318,22 +1347,7 @@ class ScheduleGenerator:
         if not segments:
             return segments
 
-        # Sort by start time
         segments.sort(key=lambda s: (s.start_time.hour, s.start_time.minute))
-
-        # Check for gaps and overlaps
-        for i in range(len(segments) - 1):
-            current_end = segments[i].end_time
-            next_start = segments[i + 1].start_time
-
-            if current_end != next_start:
-                # Log warning or fix the gap
-                import logging
-
-                logging.warning(
-                    f"Gap/overlap between segments: {current_end} -> {next_start}"
-                )
-
         return segments
 
     def generate(
@@ -1355,16 +1369,12 @@ class ScheduleGenerator:
         Returns:
             DailySchedule with all segments populated
         """
-        segments = []
-
         if day_type == "weekday":
             segments = self._generate_weekday_schedule(survey, parameters)
         else:
             segments = self._generate_weekend_schedule(survey, parameters)
 
         segments = self._validate_segments(segments)
-
-        # Apply location coordinates if available
         segments = self._assign_locations(segments, survey)
 
         return DailySchedule(
@@ -1372,26 +1382,23 @@ class ScheduleGenerator:
         )
 
     def _generate_weekday_schedule(
-        self, survey: ComprehensiveSurveyInput, parameters: BehavioralParameters
+        self,
+        survey: ComprehensiveSurveyInput,
+        parameters: BehavioralParameters,
+        context_modifiers: Optional[dict] = None,
     ) -> List[ScheduleSegment]:
-        """Generate typical weekday schedule."""
+        """Generate typical weekday schedule with proper commute handling."""
         segments = []
 
         wake_hour = parameters.waking_hour_start
-        sleep_hour_24 = parameters.sleep_hour  # In 0-23 range
 
-        # Convert to continuous time for calculations
-        # If sleep is before wake (e.g., 1 AM sleep, 7 AM wake), add 24
-        sleep_hour_continuous = sleep_hour_24
-        if sleep_hour_24 < wake_hour:
-            sleep_hour_continuous += 24
+        is_commute_day = self._should_commute_today(
+            survey, "weekday", context_modifiers
+        )
 
-        # For creating time objects, always use 0-23 range
-        def to_time_hour(hour_continuous: int) -> int:
-            """Convert continuous hour (0-47) to time hour (0-23)."""
-            return hour_continuous % 24
+        commute_minutes = SurveyMappings.COMMUTE_TIME_TO_MINUTES[survey.commute_time]
+        commute_context = self._get_commute_context(survey.commute_mode)
 
-        # --- Sleeping (until wake time) ---
         segments.append(
             ScheduleSegment(
                 start_time=time(0, 0),
@@ -1405,7 +1412,6 @@ class ScheduleGenerator:
             )
         )
 
-        # --- Morning routine (wake to wake+1) ---
         morning_end = min(wake_hour + 1, 23)
         segments.append(
             ScheduleSegment(
@@ -1415,23 +1421,15 @@ class ScheduleGenerator:
                 context=ContextType.HOME_MORNING,
                 location_label="home",
                 phone_accessible=True,
-                duration_multiplier=LiteratureConstants.CONTEXT_DURATION_MULTIPLIERS[
-                    ContextType.HOME_MORNING
-                ],
-                frequency_multiplier=LiteratureConstants.CONTEXT_FREQUENCY_MULTIPLIERS[
-                    ContextType.HOME_MORNING
-                ],
+                duration_multiplier=1.0,
+                frequency_multiplier=1.0,
             )
         )
 
-        # --- Commute to work (if applicable) ---
-        commute_minutes = SurveyMappings.COMMUTE_TIME_TO_MINUTES[survey.commute_time]
-        commute_context = self._get_commute_context(survey.commute_mode)
-
-        if commute_minutes > 10 and survey.commute_days != CommuteDays.ZERO:
+        if is_commute_day and commute_minutes > 10:
             commute_start = morning_end
             commute_duration_hours = commute_minutes / 60
-            commute_end = min(int(commute_start + commute_duration_hours), 23)
+            commute_end = min(int(commute_start + commute_duration_hours) + 1, 12)
 
             segments.append(
                 ScheduleSegment(
@@ -1450,18 +1448,18 @@ class ScheduleGenerator:
                 )
             )
             work_start = commute_end
+            work_location = "work"
+            work_context = (
+                ContextType.WORK_RESTRICTED
+                if survey.work_phone_restriction
+                == WorkPhoneRestriction.BRIEFLY_WHEN_NECESSARY
+                else ContextType.WORK_FREE
+            )
         else:
             work_start = morning_end
+            work_location = "home"
+            work_context = ContextType.WORK_FREE
 
-        # --- Work period ---
-        work_context = (
-            ContextType.WORK_RESTRICTED
-            if survey.work_phone_restriction
-            == WorkPhoneRestriction.BRIEFLY_WHEN_NECESSARY
-            else ContextType.WORK_FREE
-        )
-
-        # Morning work block (work_start to 12)
         if work_start < 12:
             segments.append(
                 ScheduleSegment(
@@ -1469,7 +1467,7 @@ class ScheduleGenerator:
                     end_time=time(12, 0),
                     activity=ActivityType.WORKING,
                     context=work_context,
-                    location_label="work",
+                    location_label=work_location,
                     phone_accessible=True,
                     duration_multiplier=LiteratureConstants.CONTEXT_DURATION_MULTIPLIERS[
                         work_context
@@ -1480,28 +1478,30 @@ class ScheduleGenerator:
                 )
             )
 
-        # --- Lunch break (12-13) ---
         segments.append(
             ScheduleSegment(
                 start_time=time(12, 0),
                 end_time=time(13, 0),
                 activity=ActivityType.LUNCH_BREAK,
-                context=ContextType.PUBLIC_PLACE,
-                location_label="work",
+                context=(
+                    ContextType.PUBLIC_PLACE
+                    if is_commute_day
+                    else ContextType.HOME_MORNING
+                ),
+                location_label=work_location,
                 phone_accessible=True,
                 duration_multiplier=1.0,
                 frequency_multiplier=1.0,
             )
         )
 
-        # --- Afternoon work (13-17) ---
         segments.append(
             ScheduleSegment(
                 start_time=time(13, 0),
                 end_time=time(17, 0),
                 activity=ActivityType.WORKING,
                 context=work_context,
-                location_label="work",
+                location_label=work_location,
                 phone_accessible=True,
                 duration_multiplier=LiteratureConstants.CONTEXT_DURATION_MULTIPLIERS[
                     work_context
@@ -1512,9 +1512,8 @@ class ScheduleGenerator:
             )
         )
 
-        # --- Commute home (17-18, adjusted by commute time) ---
         evening_start = 17
-        if commute_minutes > 10 and survey.commute_days != CommuteDays.ZERO:
+        if is_commute_day and commute_minutes > 10:
             commute_home_end = min(17 + int(commute_minutes / 60) + 1, 20)
             segments.append(
                 ScheduleSegment(
@@ -1534,13 +1533,7 @@ class ScheduleGenerator:
             )
             evening_start = commute_home_end
 
-        # --- Evening at home (until wind-down) ---
-        wind_down_hour = (
-            max(evening_start + 1, parameters.sleep_hour - 1)
-            if parameters.sleep_hour <= 24
-            else 23
-        )
-        wind_down_hour = min(wind_down_hour, 23)
+        wind_down_hour = max(evening_start + 1, min(parameters.sleep_hour - 1, 23))
 
         if evening_start < wind_down_hour:
             segments.append(
@@ -1560,32 +1553,12 @@ class ScheduleGenerator:
                 )
             )
 
-        # --- Wind-down period ---
         actual_sleep_hour = parameters.sleep_hour if parameters.sleep_hour < 24 else 23
         if wind_down_hour < actual_sleep_hour:
             segments.append(
                 ScheduleSegment(
                     start_time=time(wind_down_hour, 0),
                     end_time=time(actual_sleep_hour, 0),
-                    activity=ActivityType.WINDING_DOWN,
-                    context=ContextType.HOME_NIGHT,
-                    location_label="home",
-                    phone_accessible=True,
-                    duration_multiplier=LiteratureConstants.CONTEXT_DURATION_MULTIPLIERS[
-                        ContextType.HOME_NIGHT
-                    ],
-                    frequency_multiplier=LiteratureConstants.CONTEXT_FREQUENCY_MULTIPLIERS[
-                        ContextType.HOME_NIGHT
-                    ],
-                )
-            )
-
-        # --- Late night (if sleep after midnight) ---
-        if parameters.sleep_hour > 24:
-            segments.append(
-                ScheduleSegment(
-                    start_time=time(23, 0),
-                    end_time=time(23, 59),
                     activity=ActivityType.WINDING_DOWN,
                     context=ContextType.HOME_NIGHT,
                     location_label="home",
@@ -1612,19 +1585,15 @@ class ScheduleGenerator:
         - No commute or work segments
         - More leisure and home time
         - Extended evening sessions
-
-        Source: Roehrick et al. (2023) - weekend temporal patterns
         """
         segments = []
 
-        # Weekend wake time typically 1-2 hours later
         wake_hour = min(parameters.waking_hour_start + 1, 12)
         sleep_hour = parameters.sleep_hour
 
         if sleep_hour < wake_hour:
             sleep_hour += 24
 
-        # --- Sleeping (until wake time) ---
         segments.append(
             ScheduleSegment(
                 start_time=time(0, 0),
@@ -1638,7 +1607,6 @@ class ScheduleGenerator:
             )
         )
 
-        # --- Morning routine (wake to wake+1) ---
         morning_end = min(wake_hour + 1, 23)
         segments.append(
             ScheduleSegment(
@@ -1657,7 +1625,6 @@ class ScheduleGenerator:
             )
         )
 
-        # --- Late morning leisure ---
         lunch_hour = max(morning_end, 12)
         if morning_end < lunch_hour:
             segments.append(
@@ -1668,12 +1635,11 @@ class ScheduleGenerator:
                     context=ContextType.HOME_MORNING,
                     location_label="home",
                     phone_accessible=True,
-                    duration_multiplier=1.20,  # Weekend morning = relaxed
+                    duration_multiplier=1.20,
                     frequency_multiplier=1.10,
                 )
             )
 
-        # --- Lunch period (12-13) ---
         segments.append(
             ScheduleSegment(
                 start_time=time(12, 0),
@@ -1687,14 +1653,11 @@ class ScheduleGenerator:
             )
         )
 
-        # --- Afternoon activities (13-17) ---
-        # May include errands, exercise, or leisure based on survey
         activity_days = SurveyMappings.PHYSICAL_ACTIVITY_TO_DAYS[
             survey.physical_activity_days
         ]
 
         if activity_days >= 3:
-            # Include exercise segment
             segments.append(
                 ScheduleSegment(
                     start_time=time(13, 0),
@@ -1724,7 +1687,6 @@ class ScheduleGenerator:
                 )
             )
         else:
-            # Errands and leisure
             segments.append(
                 ScheduleSegment(
                     start_time=time(13, 0),
@@ -1750,7 +1712,6 @@ class ScheduleGenerator:
                 )
             )
 
-        # --- Evening at home (17 until wind-down) ---
         wind_down_hour = min(max(20, sleep_hour - 1 if sleep_hour <= 24 else 23), 23)
 
         segments.append(
@@ -1764,14 +1725,13 @@ class ScheduleGenerator:
                 duration_multiplier=LiteratureConstants.CONTEXT_DURATION_MULTIPLIERS[
                     ContextType.HOME_EVENING
                 ]
-                * 1.15,  # Weekend evenings slightly longer sessions
+                * 1.15,
                 frequency_multiplier=LiteratureConstants.CONTEXT_FREQUENCY_MULTIPLIERS[
                     ContextType.HOME_EVENING
                 ],
             )
         )
 
-        # --- Wind-down period ---
         actual_sleep_hour = min(sleep_hour if sleep_hour < 24 else 23, 23)
         if wind_down_hour < actual_sleep_hour:
             segments.append(
@@ -1799,7 +1759,7 @@ class ScheduleGenerator:
             CommuteMode.DRIVING: ContextType.COMMUTE_DRIVING,
             CommuteMode.PUBLIC_TRANSIT: ContextType.COMMUTE_TRANSIT,
             CommuteMode.WALKING_BIKING: ContextType.COMMUTE_WALKING,
-            CommuteMode.MIXED: ContextType.COMMUTE_TRANSIT,  # Default to transit
+            CommuteMode.MIXED: ContextType.COMMUTE_TRANSIT,
             CommuteMode.STAY_HOME: ContextType.HOME_MORNING,
             CommuteMode.WORK_FROM_HOME: ContextType.HOME_MORNING,
         }
@@ -1810,18 +1770,10 @@ class ScheduleGenerator:
     ) -> List[ScheduleSegment]:
         """
         Assign GPS coordinates to location labels.
-
-        Uses area-appropriate coordinate generation based on survey.area_type.
-        Source: Hackett et al. (2024) - mobility patterns by area type
         """
-        # Generate base home location
         home_lat, home_lon = self._generate_base_location(survey.area_type)
 
-        # Define location offsets based on area type
-        # Source: Radius of gyration literature
-        offset_scale = (
-            LiteratureConstants.RADIUS_OF_GYRATION_KM[survey.area_type] / 111
-        )  # km to degrees
+        offset_scale = LiteratureConstants.RADIUS_OF_GYRATION_KM[survey.area_type] / 111
 
         location_coords = {
             "home": (home_lat, home_lon),
@@ -1856,16 +1808,13 @@ class ScheduleGenerator:
 
     def _generate_base_location(self, area_type: AreaType) -> Tuple[float, float]:
         """Generate a plausible base location for the area type."""
-        # Use generic coordinates (can be customized)
-        # Default to continental US ranges
         if area_type == AreaType.URBAN:
-            # Major city center-ish
             lat = self.rng.uniform(38.0, 42.0)
             lon = self.rng.uniform(-122.0, -74.0)
         elif area_type == AreaType.SUBURBAN:
             lat = self.rng.uniform(35.0, 45.0)
             lon = self.rng.uniform(-120.0, -75.0)
-        else:  # Rural
+        else:
             lat = self.rng.uniform(33.0, 47.0)
             lon = self.rng.uniform(-115.0, -80.0)
 
