@@ -4,8 +4,9 @@ import streamlit as st
 import pandas as pd
 import requests
 import json
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import List, Optional
+import numpy as np
 
 # Plotly for visualizations
 import plotly.express as px
@@ -45,6 +46,13 @@ st.markdown(
         margin-bottom: 0.5rem;
         padding-bottom: 0.3rem;
         border-bottom: 2px solid #1f77b4;
+    }
+    .metric-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 1rem;
+        border-radius: 10px;
+        color: white;
+        text-align: center;
     }
     .question-text {
         font-size: 1rem;
@@ -324,12 +332,8 @@ def multi_select_to_values(display_to_value: dict, selected_displays: list) -> l
 def normalize_persona_data(data: dict) -> dict:
     """
     Normalize persona data from different sources.
-    The /persona/{id} endpoint returns data nested under 'survey', 'dimensions', etc.
-    The /generate endpoint returns it directly.
     """
-    # If data has nested structure from /persona/{id}
     if "survey" in data and "dimensions" in data and "parameters" in data:
-        # Already in the right format
         return {
             "persona_id": data.get("persona_id", "unknown"),
             "dimensions": data.get("dimensions", {}),
@@ -341,8 +345,28 @@ def normalize_persona_data(data: dict) -> dict:
                 "age_range": data.get("survey", {}).get("age_range", "N/A"),
             },
         }
-    # Already normalized (from /generate)
     return data
+
+
+def get_sessions_df(schedule: dict) -> pd.DataFrame:
+    """Extract sessions from schedule into a DataFrame."""
+    if not schedule or "sessions" not in schedule:
+        return pd.DataFrame()
+
+    sessions = schedule.get("sessions", [])
+    if not sessions:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(sessions)
+
+    # Parse timestamp
+    if "timestamp" in df.columns:
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        df["hour"] = df["timestamp"].dt.hour
+        df["minute"] = df["timestamp"].dt.minute
+        df["time_decimal"] = df["hour"] + df["minute"] / 60
+
+    return df
 
 
 # ============================================================
@@ -368,7 +392,6 @@ def render_sidebar():
     # ========== LOAD BY ID SECTION ==========
     st.sidebar.subheader("🔍 Load Persona by ID")
 
-    # Check URL query params first
     query_params = st.query_params
     url_persona_id = query_params.get("id", "")
 
@@ -386,27 +409,23 @@ def render_sidebar():
     with col2:
         clear_clicked = st.button("Clear", use_container_width=True, key="clear_btn")
 
-    # Handle load
     if load_clicked and persona_id_input:
         with st.sidebar.status("Loading...", expanded=True):
             data = fetch_persona_by_id(persona_id_input.strip())
             if data:
                 st.session_state.generation_result = normalize_persona_data(data)
                 st.session_state.view_mode = "results"
-                # Update URL
                 st.query_params["id"] = persona_id_input.strip()
                 st.rerun()
             else:
                 st.sidebar.error(f"Persona not found: {persona_id_input[:20]}...")
 
-    # Handle clear
     if clear_clicked:
         st.session_state.generation_result = None
         st.session_state.view_mode = "survey"
         st.query_params.clear()
         st.rerun()
 
-    # Auto-load from URL on first visit
     if url_persona_id and st.session_state.generation_result is None:
         data = fetch_persona_by_id(url_persona_id.strip())
         if data:
@@ -438,788 +457,1676 @@ def render_sidebar():
 
 
 # ============================================================
-# VISUALIZATION FUNCTIONS
+# NEW DASHBOARD VISUALIZATIONS
 # ============================================================
 
 
-def render_dimensions_radar(dimensions: dict) -> go.Figure:
-    """Radar chart of behavioral dimensions."""
+def render_glance_vs_engaged_pie(df: pd.DataFrame) -> go.Figure:
+    """Pie chart comparing glances vs engaged sessions."""
+    if df.empty or "is_glance" not in df.columns:
+        return go.Figure()
 
-    labels = [
-        "Chronotype<br>(evening →)",
-        "Usage<br>Intensity",
-        "Attentional<br>Granularity",
-        "Contextual<br>Sensitivity",
-        "Social<br>Orientation",
-        "Mobility<br>Diversity",
-        "Routine<br>Stability",
-        "Novelty<br>Seeking",
-    ]
-
-    keys = [
-        "chronotype_score",
-        "usage_intensity",
-        "attentional_granularity",
-        "contextual_sensitivity",
-        "social_orientation",
-        "mobility_diversity",
-        "routine_stability",
-        "novelty_seeking",
-    ]
-
-    values = [dimensions.get(k, 0.5) for k in keys]
-
-    fig = go.Figure()
-
-    fig.add_trace(
-        go.Scatterpolar(
-            r=values + [values[0]],
-            theta=labels + [labels[0]],
-            fill="toself",
-            fillcolor="rgba(31, 119, 180, 0.3)",
-            line=dict(color="rgb(31, 119, 180)", width=2),
-            name="Profile",
-        )
-    )
-
-    fig.update_layout(
-        autosize=True,
-        polar=dict(
-            bgcolor="white",
-            radialaxis=dict(
-                visible=True,
-                range=[0, 1],
-                tickvals=[0.25, 0.5, 0.75, 1.0],
-                ticktext=["0.25", "0.5", "0.75", "1.0"],
-                tickfont=dict(color="black", size=11),
-                gridcolor="rgba(0, 0, 0, 0.18)",
-                linecolor="rgba(0, 0, 0, 0.25)",
-            ),
-            angularaxis=dict(
-                tickfont=dict(color="white", size=14),
-                linecolor="rgba(0, 0, 0, 0.2)",
-                gridcolor="rgba(0, 0, 0, 0.18)",
-                rotation=0,
-                direction="clockwise",
-            ),
-            domain=dict(x=[0.08, 0.92], y=[0.12, 0.98]),
-        ),
-        showlegend=False,
-        height=560,
-        margin=dict(t=20, b=55, l=40, r=40),
-    )
-
-    return fig
-
-
-def render_app_weights_pie(parameters: dict) -> go.Figure:
-    """Pie chart of app category weights."""
-
-    categories = [
-        "Social",
-        "Messaging",
-        "Video",
-        "Music",
-        "Navigation",
-        "Productivity",
-        "News",
-        "Games",
-        "Shopping",
-    ]
-    keys = [
-        "weight_social",
-        "weight_messaging",
-        "weight_video",
-        "weight_music",
-        "weight_navigation",
-        "weight_productivity",
-        "weight_news",
-        "weight_games",
-        "weight_shopping",
-    ]
-
-    values = [parameters.get(k, 0) for k in keys]
-
-    # Filter out zeros
-    filtered = [(c, v) for c, v in zip(categories, values) if v > 0.01]
-    if not filtered:
-        filtered = [("No data", 1)]
-
-    cats, vals = zip(*filtered)
+    glance_counts = df["is_glance"].value_counts()
+    labels = ["Engaged Sessions", "Quick Glances"]
+    values = [glance_counts.get(False, 0), glance_counts.get(True, 0)]
+    colors = ["#3498db", "#e74c3c"]
 
     fig = go.Figure(
         data=[
             go.Pie(
-                labels=cats,
-                values=vals,
+                labels=labels,
+                values=values,
                 hole=0.4,
-                marker=dict(colors=px.colors.qualitative.Set2),
+                marker=dict(colors=colors),
+                textinfo="label+percent",
+                textposition="outside",
             )
         ]
     )
 
     fig.update_layout(
-        title="App Category Distribution",
+        title="Glances vs Engaged Sessions",
         height=350,
-        margin=dict(t=50, b=20, l=20, r=20),
+        margin=dict(t=60, b=20, l=20, r=20),
+        showlegend=True,
     )
 
     return fig
 
 
-def render_hourly_usage_pattern(parameters: dict) -> go.Figure:
-    """Bar chart of predicted hourly usage."""
+def render_glance_duration_comparison(df: pd.DataFrame) -> go.Figure:
+    """Box plot comparing duration of glances vs non-glances."""
+    if df.empty or "is_glance" not in df.columns:
+        return go.Figure()
 
-    waking_start = parameters.get("waking_hour_start", 7)
-    waking_end = parameters.get("sleep_hour", 23)
-    peak_hour = parameters.get("temporal_peak_hour", 20)
-    late_night_prob = parameters.get("late_night_probability", 0.1)
+    df_plot = df.copy()
+    df_plot["Session Type"] = df_plot["is_glance"].map(
+        lambda x: "Glance" if x else "Engaged"
+    )
 
-    hours = list(range(24))
-    activity = []
+    fig = go.Figure()
 
-    for h in hours:
-        # Base: gaussian around peak hour
-        distance = min(abs(h - peak_hour), 24 - abs(h - peak_hour))
-        base = max(0, 1 - (distance / 8) ** 2)
+    for session_type, color in [("Glance", "#e74c3c"), ("Engaged", "#3498db")]:
+        data = df_plot[df_plot["Session Type"] == session_type]["duration_seconds"]
+        fig.add_trace(
+            go.Box(y=data, name=session_type, marker_color=color, boxmean=True)
+        )
 
-        # Suppress during sleep
-        if waking_end >= waking_start:
-            # Normal schedule (e.g., 7am - 11pm)
-            if h < waking_start or h > waking_end:
-                base *= 0.05
-        else:
-            # Wraps around midnight (e.g., 10am - 2am)
-            if h < waking_start and h > waking_end:
-                base *= 0.05
+    fig.update_layout(
+        title="Session Duration: Glances vs Engaged",
+        yaxis_title="Duration (seconds)",
+        height=350,
+        showlegend=False,
+    )
 
-        # Late night boost
-        if h >= 23 or h <= 2:
-            base = max(base, late_night_prob * 0.7)
+    return fig
 
-        activity.append(base)
 
-    # Normalize to 0-1
-    max_val = max(activity) if max(activity) > 0 else 1
-    activity = [a / max_val for a in activity]
+def render_glance_rate_by_app(df: pd.DataFrame) -> go.Figure:
+    """Bar chart showing glance rate by app category."""
+    if df.empty or "app_category" not in df.columns:
+        return go.Figure()
+
+    stats = (
+        df.groupby("app_category").agg({"is_glance": ["sum", "count"]}).reset_index()
+    )
+    stats.columns = ["app_category", "glances", "total"]
+    stats["glance_rate"] = (stats["glances"] / stats["total"] * 100).round(1)
+    stats = stats.sort_values("glance_rate", ascending=True)
+
+    fig = go.Figure(
+        go.Bar(
+            x=stats["glance_rate"],
+            y=stats["app_category"].str.replace("_", " ").str.title(),
+            orientation="h",
+            marker_color=stats["glance_rate"],
+            marker_colorscale="RdYlGn_r",
+            text=stats["glance_rate"].astype(str) + "%",
+            textposition="outside",
+        )
+    )
+
+    fig.update_layout(
+        title="Glance Rate by App Category",
+        xaxis_title="Glance Rate (%)",
+        height=400,
+        margin=dict(l=150),
+    )
+
+    return fig
+
+
+def render_glance_timeline(df: pd.DataFrame) -> go.Figure:
+    """Timeline showing glances vs engaged sessions throughout the day."""
+    if df.empty or "hour" not in df.columns:
+        return go.Figure()
+
+    hourly = df.groupby(["hour", "is_glance"]).size().unstack(fill_value=0)
+    hourly.columns = ["Engaged", "Glance"] if False in hourly.columns else ["Glance"]
+
+    fig = go.Figure()
+
+    if "Engaged" in hourly.columns:
+        fig.add_trace(
+            go.Bar(
+                x=hourly.index,
+                y=hourly["Engaged"],
+                name="Engaged",
+                marker_color="#3498db",
+            )
+        )
+
+    if "Glance" in hourly.columns:
+        fig.add_trace(
+            go.Bar(
+                x=hourly.index,
+                y=hourly["Glance"],
+                name="Glance",
+                marker_color="#e74c3c",
+            )
+        )
+
+    fig.update_layout(
+        title="Glances vs Engaged Sessions by Hour",
+        xaxis_title="Hour of Day",
+        yaxis_title="Number of Sessions",
+        barmode="stack",
+        height=350,
+        xaxis=dict(tickmode="linear", tick0=0, dtick=2),
+    )
+
+    return fig
+
+
+def render_session_duration_histogram(df: pd.DataFrame) -> go.Figure:
+    """Histogram of session durations."""
+    if df.empty or "duration_seconds" not in df.columns:
+        return go.Figure()
 
     fig = go.Figure()
 
     fig.add_trace(
+        go.Histogram(
+            x=df["duration_seconds"], nbinsx=30, marker_color="#9b59b6", opacity=0.75
+        )
+    )
+
+    # Add mean line
+    mean_dur = df["duration_seconds"].mean()
+    fig.add_vline(
+        x=mean_dur,
+        line_dash="dash",
+        line_color="red",
+        annotation_text=f"Mean: {mean_dur:.1f}s",
+    )
+
+    fig.update_layout(
+        title="Distribution of Session Durations",
+        xaxis_title="Duration (seconds)",
+        yaxis_title="Count",
+        height=350,
+    )
+
+    return fig
+
+
+def render_duration_by_app_box(df: pd.DataFrame) -> go.Figure:
+    """Box plot of duration by app category."""
+    if df.empty:
+        return go.Figure()
+
+    fig = px.box(
+        df,
+        x="app_category",
+        y="duration_seconds",
+        color="app_category",
+        color_discrete_sequence=px.colors.qualitative.Set2,
+    )
+
+    fig.update_layout(
+        title="Session Duration by App Category",
+        xaxis_title="",
+        yaxis_title="Duration (seconds)",
+        showlegend=False,
+        height=400,
+        xaxis_tickangle=-45,
+    )
+
+    return fig
+
+
+def render_app_category_sessions_bar(df: pd.DataFrame) -> go.Figure:
+    """Bar chart of session count by app category."""
+    if df.empty or "app_category" not in df.columns:
+        return go.Figure()
+
+    counts = df["app_category"].value_counts().sort_values(ascending=True)
+
+    fig = go.Figure(
         go.Bar(
-            x=hours,
-            y=activity,
-            marker_color=[
-                (
-                    "#1f77b4"
-                    if waking_start <= h <= waking_end
-                    or (
-                        waking_end < waking_start
-                        and (h >= waking_start or h <= waking_end)
-                    )
-                    else "#95a5a6"
-                )
-                for h in hours
-            ],
-            hovertemplate="Hour %{x}:00<br>Activity: %{y:.2f}<extra></extra>",
+            x=counts.values,
+            y=counts.index.str.replace("_", " ").str.title(),
+            orientation="h",
+            marker_color=px.colors.qualitative.Plotly[: len(counts)],
+            text=counts.values,
+            textposition="outside",
+        )
+    )
+
+    fig.update_layout(
+        title="Number of Sessions by App Category",
+        xaxis_title="Session Count",
+        height=400,
+        margin=dict(l=150),
+    )
+
+    return fig
+
+
+def render_app_total_time_bar(df: pd.DataFrame) -> go.Figure:
+    """Bar chart of total time by app category."""
+    if (
+        df.empty
+        or "app_category" not in df.columns
+        or "duration_seconds" not in df.columns
+    ):
+        return go.Figure()
+
+    grouped = df.groupby("app_category")["duration_seconds"].sum()
+    time_by_app: pd.Series = pd.Series(grouped, dtype="float64") / 60.0
+
+    fig = go.Figure(
+        go.Bar(
+            x=time_by_app.values,
+            y=time_by_app.index.astype(str).str.replace("_", " ").str.title(),
+            orientation="h",
+            marker_color=px.colors.qualitative.Set3[: len(time_by_app)],
+            text=[f"{v:.1f} min" for v in time_by_app.values],
+            textposition="outside",
+        )
+    )
+
+    fig.update_layout(
+        title="Total Time by App Category",
+        xaxis_title="Time (minutes)",
+        height=400,
+        margin=dict(l=150),
+    )
+
+    return fig
+
+
+def render_app_heatmap_by_hour(df: pd.DataFrame) -> go.Figure:
+    """Heatmap of app usage by hour."""
+    if df.empty or "hour" not in df.columns:
+        return go.Figure()
+
+    pivot = df.groupby(["hour", "app_category"]).size().unstack(fill_value=0)
+
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=pivot.values.T,
+            x=pivot.index,
+            y=[cat.replace("_", " ").title() for cat in pivot.columns],
+            colorscale="Blues",
+            hoverongaps=False,
+        )
+    )
+
+    fig.update_layout(
+        title="App Usage Heatmap by Hour",
+        xaxis_title="Hour of Day",
+        yaxis_title="App Category",
+        height=450,
+        xaxis=dict(tickmode="linear", tick0=0, dtick=2),
+    )
+
+    return fig
+
+
+def render_context_distribution_pie(df: pd.DataFrame) -> go.Figure:
+    """Pie chart of sessions by context."""
+    if df.empty or "context" not in df.columns:
+        return go.Figure()
+
+    context_counts = df["context"].value_counts()
+    labels = [str(c).replace("_", " ").title() for c in context_counts.index]
+
+    fig = go.Figure(
+        data=[
+            go.Pie(
+                labels=labels,
+                values=context_counts.values,
+                hole=0.3,
+                marker=dict(colors=px.colors.qualitative.Pastel),
+            )
+        ]
+    )
+
+    fig.update_layout(title="Sessions by Context", height=350)
+
+    return fig
+
+
+def render_activity_breakdown_bar(df: pd.DataFrame) -> go.Figure:
+    """Stacked bar of app usage by activity."""
+    if df.empty or "activity" not in df.columns or "app_category" not in df.columns:
+        return go.Figure()
+
+    pivot = df.groupby(["activity", "app_category"]).size().unstack(fill_value=0)
+
+    fig = go.Figure()
+    activity_labels = [str(a).replace("_", " ").title() for a in pivot.index]
+
+    for col in pivot.columns:
+        fig.add_trace(
+            go.Bar(
+                name=str(col).replace("_", " ").title(),
+                x=activity_labels,
+                y=pivot[col],
+            )
+        )
+
+    fig.update_layout(
+        title="App Usage by Activity",
+        xaxis_title="Activity",
+        yaxis_title="Session Count",
+        barmode="stack",
+        height=400,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+
+    return fig
+
+
+def render_user_initiated_pie(df: pd.DataFrame) -> go.Figure:
+    """Pie chart of user-initiated vs system-triggered sessions."""
+    if df.empty or "is_user_initiated" not in df.columns:
+        return go.Figure()
+
+    counts = df["is_user_initiated"].value_counts()
+
+    fig = go.Figure(
+        data=[
+            go.Pie(
+                labels=["User Initiated", "System Triggered"],
+                values=[counts.get(True, 0), counts.get(False, 0)],
+                hole=0.4,
+                marker=dict(colors=["#27ae60", "#f39c12"]),
+            )
+        ]
+    )
+
+    fig.update_layout(title="User Initiated vs System Triggered", height=300)
+
+    return fig
+
+
+def render_user_initiated_by_app(df: pd.DataFrame) -> go.Figure:
+    """Bar chart of user-initiated rate by app category."""
+    if df.empty:
+        return go.Figure()
+    stats = (
+        df.groupby("app_category")
+        .agg({"is_user_initiated": ["sum", "count"]})
+        .reset_index()
+    )
+    stats.columns = ["app_category", "user_initiated", "total"]
+    stats["user_rate"] = (stats["user_initiated"] / stats["total"] * 100).round(1)
+    stats = stats.sort_values("user_rate", ascending=True)
+
+    fig = go.Figure(
+        go.Bar(
+            x=stats["user_rate"],
+            y=stats["app_category"].str.replace("_", " ").str.title(),
+            orientation="h",
+            marker_color=stats["user_rate"],
+            marker_colorscale="RdYlGn_r",
+            text=stats["user_rate"].astype(str) + "%",
+            textposition="outside",
+        )
+    )
+
+    fig.update_layout(
+        title="User-Initiated Rate by App Category",
+        xaxis_title="User-Initiated Rate (%)",
+        height=400,
+        margin=dict(l=150),
+    )
+
+    return fig
+
+
+def render_sessions_by_hour_line(df: pd.DataFrame) -> go.Figure:
+    """Line chart showing session count by hour."""
+    if df.empty or "hour" not in df.columns:
+        return go.Figure()
+
+    hourly = df.groupby("hour").size().reindex(range(24), fill_value=0)
+
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Scatter(
+            x=hourly.index,
+            y=hourly.values,
+            mode="lines+markers",
+            fill="tozeroy",
+            marker=dict(size=8, color="#3498db"),
+            line=dict(width=3, color="#3498db"),
+            fillcolor="rgba(52, 152, 219, 0.3)",
         )
     )
 
     # Mark peak hour
-    fig.add_vline(
-        x=peak_hour, line_dash="dash", line_color="red", annotation_text="Peak"
+    peak_hour = hourly.idxmax()
+    fig.add_annotation(
+        x=peak_hour,
+        y=hourly[peak_hour],
+        text=f"Peak: {peak_hour}:00",
+        showarrow=True,
+        arrowhead=2,
+        arrowcolor="#e74c3c",
+        font=dict(color="#e74c3c", size=12),
     )
 
     fig.update_layout(
-        title="Predicted Hourly Phone Usage Pattern",
+        title="Session Frequency Throughout the Day",
         xaxis_title="Hour of Day",
-        yaxis_title="Relative Activity",
+        yaxis_title="Number of Sessions",
+        height=350,
         xaxis=dict(tickmode="linear", tick0=0, dtick=2),
-        yaxis=dict(range=[0, 1.1]),
-        height=300,
-        margin=dict(t=50, b=50, l=50, r=30),
     )
 
     return fig
 
 
-def render_schedule_timeline(schedule: dict) -> Optional[go.Figure]:
-    """Gantt-style timeline of daily schedule."""
+def render_time_between_sessions(df: pd.DataFrame) -> go.Figure:
+    """Histogram of time gaps between consecutive sessions."""
+    if df.empty or "timestamp" not in df.columns or len(df) < 2:
+        return go.Figure()
 
-    if not schedule or "segments" not in schedule:
-        return None
+    df_sorted = df.sort_values("timestamp")
+    gaps = df_sorted["timestamp"].diff().dt.total_seconds() / 60  # Convert to minutes
+    gaps = gaps.dropna()
+    gaps = gaps[gaps < 120]  # Filter out gaps > 2 hours for better visualization
 
-    segments = schedule["segments"]
-
-    # Activity colors
-    colors = {
-        "sleeping": "#2C3E50",
-        "waking_up": "#F39C12",
-        "morning_routine": "#E74C3C",
-        "commuting": "#9B59B6",
-        "working": "#3498DB",
-        "lunch_break": "#2ECC71",
-        "exercising": "#1ABC9C",
-        "errands": "#E67E22",
-        "home_evening": "#F1C40F",
-        "leisure": "#FF6B6B",
-        "winding_down": "#95A5A6",
-    }
+    if len(gaps) == 0:
+        return go.Figure()
 
     fig = go.Figure()
 
-    for i, seg in enumerate(segments):
-        activity = seg.get("activity", "unknown")
-        start_str = seg.get("start_time", "00:00")
-        end_str = seg.get("end_time", "00:00")
-        context = seg.get("context", "unknown")
-        sessions = seg.get("expected_sessions", 0)
+    fig.add_trace(go.Histogram(x=gaps, nbinsx=30, marker_color="#2ecc71", opacity=0.75))
 
-        # Parse time strings
-        start_parts = start_str.split(":")
-        end_parts = end_str.split(":")
-        start_h = int(start_parts[0]) + int(start_parts[1]) / 60
-        end_h = int(end_parts[0]) + int(end_parts[1]) / 60
-
-        # Handle overnight
-        if end_h < start_h:
-            end_h += 24
-
-        color = colors.get(activity, "#BDC3C7")
-
-        fig.add_trace(
-            go.Bar(
-                x=[end_h - start_h],
-                y=[0],
-                base=[start_h],
-                orientation="h",
-                marker=dict(color=color, line=dict(color="white", width=1)),
-                name=activity,
-                text=f"{activity}<br>{sessions} sessions",
-                textposition="inside",
-                hovertemplate=f"<b>{activity}</b><br>Time: {start_str} - {end_str}<br>Context: {context}<br>Expected sessions: {sessions}<extra></extra>",
-                showlegend=False,
-            )
-        )
+    median_gap = gaps.median()
+    fig.add_vline(
+        x=median_gap,
+        line_dash="dash",
+        line_color="red",
+        annotation_text=f"Median: {median_gap:.1f} min",
+    )
 
     fig.update_layout(
-        title="Daily Schedule Timeline",
-        xaxis=dict(
-            title="Hour of Day",
-            range=[0, 24],
-            tickmode="linear",
-            tick0=0,
-            dtick=2,
-            ticktext=[f"{h}:00" for h in range(0, 25, 2)],
-            tickvals=list(range(0, 25, 2)),
-        ),
-        yaxis=dict(visible=False),
-        height=150,
-        margin=dict(t=50, b=50, l=30, r=30),
-        barmode="overlay",
+        title="Time Between Consecutive Sessions",
+        xaxis_title="Gap (minutes)",
+        yaxis_title="Count",
+        height=350,
     )
 
     return fig
 
 
-def render_schedule_detail_table(schedule: dict) -> pd.DataFrame:
-    """Table view of schedule segments."""
+def render_location_sessions_bar(df: pd.DataFrame) -> go.Figure:
+    """Bar chart of sessions by location."""
+    if df.empty or "location_label" not in df.columns:
+        return go.Figure()
 
-    if not schedule or "segments" not in schedule:
+    loc_counts = df["location_label"].value_counts()
+
+    fig = go.Figure(
+        go.Bar(
+            x=loc_counts.values,
+            y=loc_counts.index.str.replace("_", " ").str.title(),
+            orientation="h",
+            marker_color=px.colors.qualitative.Safe[: len(loc_counts)],
+            text=loc_counts.values,
+            textposition="outside",
+        )
+    )
+
+    fig.update_layout(
+        title="Sessions by Location",
+        xaxis_title="Session Count",
+        height=350,
+        margin=dict(l=120),
+    )
+
+    return fig
+
+
+def render_location_map(df: pd.DataFrame) -> go.Figure:
+    """Scatter mapbox of session locations."""
+    if df.empty or "latitude" not in df.columns or "longitude" not in df.columns:
+        return go.Figure()
+
+    # Filter out null coordinates
+    df_map = df.dropna(subset=["latitude", "longitude"])
+
+    if df_map.empty:
+        return go.Figure()
+
+    # Aggregate by location
+    loc_agg = (
+        df_map.groupby(["latitude", "longitude", "location_label"])
+        .agg({"session_id": "count", "duration_seconds": "sum"})
+        .reset_index()
+    )
+    loc_agg.columns = [
+        "latitude",
+        "longitude",
+        "location_label",
+        "session_count",
+        "total_duration",
+    ]
+    loc_agg["total_minutes"] = loc_agg["total_duration"] / 60
+
+    fig = go.Figure(
+        go.Scattermapbox(
+            lat=loc_agg["latitude"],
+            lon=loc_agg["longitude"],
+            mode="markers",
+            marker=dict(
+                size=loc_agg["session_count"] * 3 + 10,
+                color=loc_agg["session_count"],
+                colorscale="Viridis",
+                showscale=True,
+                colorbar=dict(title="Sessions"),
+            ),
+            text=loc_agg.apply(
+                lambda r: f"{r['location_label']}<br>Sessions: {r['session_count']}<br>Time: {r['total_minutes']:.1f} min",
+                axis=1,
+            ),
+            hoverinfo="text",
+        )
+    )
+
+    center_lat = loc_agg["latitude"].mean()
+    center_lon = loc_agg["longitude"].mean()
+
+    fig.update_layout(
+        mapbox=dict(
+            style="carto-positron", center=dict(lat=center_lat, lon=center_lon), zoom=11
+        ),
+        title="Geographic Distribution of Phone Usage",
+        height=500,
+        margin=dict(l=0, r=0, t=40, b=0),
+    )
+
+    return fig
+
+
+def render_activity_time_distribution(df: pd.DataFrame) -> go.Figure:
+    """Stacked area chart showing activity distribution over time."""
+    if df.empty or "hour" not in df.columns or "activity" not in df.columns:
+        return go.Figure()
+
+    pivot = df.groupby(["hour", "activity"]).size().unstack(fill_value=0)
+    pivot = pivot.reindex(range(24), fill_value=0)
+
+    fig = go.Figure()
+
+    colors = px.colors.qualitative.Set2
+    for i, col in enumerate(pivot.columns):
+        fig.add_trace(
+            go.Scatter(
+                x=pivot.index,
+                y=pivot[col],
+                name=col.replace("_", " ").title(),
+                mode="lines",
+                stackgroup="one",
+                line=dict(width=0.5),
+                fillcolor=colors[i % len(colors)],
+            )
+        )
+
+    fig.update_layout(
+        title="Activity Distribution Throughout the Day",
+        xaxis_title="Hour of Day",
+        yaxis_title="Number of Sessions",
+        height=400,
+        xaxis=dict(tickmode="linear", tick0=0, dtick=2),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+    )
+
+    return fig
+
+
+def render_dimension_gauge(
+    dimension_name: str, value: float, low_label: str, high_label: str
+) -> go.Figure:
+    """Create a gauge chart for a behavioral dimension."""
+    fig = go.Figure(
+        go.Indicator(
+            mode="gauge+number",
+            value=value,
+            domain=dict(x=[0, 1], y=[0, 1]),
+            title=dict(
+                text=dimension_name.replace("_", " ").title(), font=dict(size=14)
+            ),
+            number=dict(font=dict(size=24)),
+            gauge=dict(
+                axis=dict(range=[0, 1], tickwidth=1, tickcolor="darkgray"),
+                bar=dict(color="#3498db"),
+                bgcolor="white",
+                borderwidth=2,
+                bordercolor="gray",
+                steps=[
+                    dict(range=[0, 0.33], color="#ffebee"),
+                    dict(range=[0.33, 0.66], color="#fff3e0"),
+                    dict(range=[0.66, 1], color="#e8f5e9"),
+                ],
+                threshold=dict(
+                    line=dict(color="red", width=2), thickness=0.75, value=value
+                ),
+            ),
+        )
+    )
+
+    fig.add_annotation(
+        x=0.1, y=-0.1, text=low_label, showarrow=False, font=dict(size=10, color="gray")
+    )
+
+    fig.add_annotation(
+        x=0.9,
+        y=-0.1,
+        text=high_label,
+        showarrow=False,
+        font=dict(size=10, color="gray"),
+    )
+
+    fig.update_layout(height=200, margin=dict(l=20, r=20, t=50, b=30))
+
+    return fig
+
+
+def render_dimensions_radar(dimensions: dict) -> go.Figure:
+    """Radar chart showing all behavioral dimensions."""
+    if not dimensions:
+        return go.Figure()
+
+    dimension_labels = {
+        "chronotype_score": "Chronotype",
+        "usage_intensity": "Usage Intensity",
+        "attentional_granularity": "Attentional Gran.",
+        "contextual_sensitivity": "Context Sensitivity",
+        "social_orientation": "Social Orientation",
+        "mobility_diversity": "Mobility Diversity",
+        "routine_stability": "Routine Stability",
+        "novelty_seeking": "Novelty Seeking",
+    }
+
+    categories = []
+    values = []
+
+    for dim_key, dim_label in dimension_labels.items():
+        if dim_key in dimensions:
+            categories.append(dim_label)
+            values.append(dimensions[dim_key])
+
+    # Close the radar chart
+    categories.append(categories[0])
+    values.append(values[0])
+
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Scatterpolar(
+            r=values,
+            theta=categories,
+            fill="toself",
+            fillcolor="rgba(52, 152, 219, 0.3)",
+            line=dict(color="#3498db", width=2),
+            marker=dict(size=8, color="#3498db"),
+        )
+    )
+
+    fig.update_layout(
+        polar=dict(
+            radialaxis=dict(visible=True, range=[0, 1], tickvals=[0.25, 0.5, 0.75, 1.0])
+        ),
+        title="Behavioral Dimensions Profile",
+        height=450,
+        showlegend=False,
+    )
+
+    return fig
+
+
+def render_session_burst_analysis(df: pd.DataFrame) -> go.Figure:
+    """Identify and visualize session bursts."""
+    if df.empty or "timestamp" not in df.columns or len(df) < 3:
+        return go.Figure()
+
+    df_sorted = df.sort_values("timestamp").copy()
+    df_sorted["gap_minutes"] = df_sorted["timestamp"].diff().dt.total_seconds() / 60
+
+    # Define burst as sessions within 5 minutes of each other
+    burst_threshold = 5
+    df_sorted["new_burst"] = df_sorted["gap_minutes"].isna() | (
+        df_sorted["gap_minutes"] > burst_threshold
+    )
+    df_sorted["burst_id"] = df_sorted["new_burst"].cumsum()
+
+    burst_sizes = df_sorted.groupby("burst_id").size()
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Histogram(x=burst_sizes, marker_color="#9b59b6", opacity=0.75))
+
+    fig.update_layout(
+        title=f"Session Burst Sizes (sessions within {burst_threshold} min)",
+        xaxis_title="Sessions per Burst",
+        yaxis_title="Number of Bursts",
+        height=300,
+    )
+
+    return fig
+
+
+def render_weekday_pattern(df: pd.DataFrame, schedule: dict) -> go.Figure:
+    """Show if it's a weekday vs weekend pattern."""
+    if not schedule:
+        return go.Figure()
+
+    day_type = schedule.get("day_type", "unknown")
+
+    fig = go.Figure(
+        go.Indicator(
+            mode="number+delta",
+            value=len(df) if not df.empty else 0,
+            title=dict(text=f"Sessions ({day_type.title()})"),
+            delta=dict(reference=50, relative=True),
+            domain=dict(x=[0, 1], y=[0, 1]),
+        )
+    )
+
+    fig.update_layout(height=200)
+
+    return fig
+
+
+from typing import cast
+import pandas as pd
+
+
+def render_top_sessions_table(df: pd.DataFrame) -> pd.DataFrame:
+    """Create a table of top 10 longest sessions."""
+    if df.empty or "duration_seconds" not in df.columns:
         return pd.DataFrame()
 
-    rows = []
-    for seg in schedule["segments"]:
-        rows.append(
-            {
-                "Time": f"{seg.get('start_time', '')} - {seg.get('end_time', '')}",
-                "Activity": seg.get("activity", "").replace("_", " ").title(),
-                "Context": seg.get("context", "").replace("_", " ").title(),
-                "Location": seg.get("location_label", ""),
-                "Phone Access": "✅" if seg.get("phone_accessible", True) else "❌",
-                "Expected Sessions": seg.get("expected_sessions", 0),
-            }
+    required_columns = [
+        "timestamp",
+        "app_category",
+        "duration_seconds",
+        "activity",
+        "context",
+        "location_label",
+    ]
+    available_columns = [col for col in required_columns if col in df.columns]
+
+    top_sessions = cast(
+        pd.DataFrame,
+        df.nlargest(10, "duration_seconds")[available_columns].copy(),
+    )
+
+    if "timestamp" in top_sessions.columns:
+        timestamp_series = pd.Series(
+            pd.to_datetime(top_sessions["timestamp"], errors="coerce"),
+            index=top_sessions.index,
         )
+        top_sessions["timestamp"] = timestamp_series.dt.strftime("%H:%M:%S")
 
-    return pd.DataFrame(rows)
+    duration_series = pd.Series(
+        pd.to_numeric(top_sessions["duration_seconds"], errors="coerce"),
+        index=top_sessions.index,
+        dtype="float64",
+    ).fillna(0.0)
+
+    top_sessions["duration"] = duration_series.map(
+        lambda x: f"{int(x // 60)}m {int(x % 60)}s"
+    )
+
+    for col in ["app_category", "activity", "context", "location_label"]:
+        if col in top_sessions.columns:
+            string_series = pd.Series(
+                top_sessions[col],
+                index=top_sessions.index,
+                dtype="string",
+            )
+            top_sessions[col] = string_series.str.replace(
+                "_", " ", regex=False
+            ).str.title()
+
+    output_columns = [
+        col
+        for col in [
+            "timestamp",
+            "app_category",
+            "duration",
+            "activity",
+            "context",
+            "location_label",
+        ]
+        if col in top_sessions.columns
+    ]
+
+    return cast(pd.DataFrame, top_sessions.loc[:, output_columns])
 
 
-# ============================================================
-# SURVEY PAGE
-# ============================================================
+def render_summary_metrics(df: pd.DataFrame, schedule: dict) -> dict:
+    """Calculate summary metrics for the dashboard."""
+    if df.empty:
+        return {}
 
+    total_sessions = len(df)
+    total_screen_time = df["duration_seconds"].sum() / 60  # minutes
+    avg_session_duration = df["duration_seconds"].mean()
+    glance_rate = (
+        (df["is_glance"].sum() / total_sessions * 100)
+        if "is_glance" in df.columns
+        else 0
+    )
+    user_initiated_rate = (
+        (df["is_user_initiated"].sum() / total_sessions * 100)
+        if "is_user_initiated" in df.columns
+        else 0
+    )
 
-def render_survey_page():
-    """Render the survey input form."""
+    # Peak hour
+    if "hour" in df.columns:
+        peak_hour = df["hour"].mode().iloc[0] if len(df["hour"].mode()) > 0 else 12
+    else:
+        peak_hour = "N/A"
 
-    st.markdown("### Complete the survey below to generate your persona")
-
-    # Progress indicator
-    st.progress(0, text="Fill out all sections below")
-
-    with st.form("persona_survey", clear_on_submit=False):
-
-        # ========== SECTION 1: Demographics ==========
-        st.markdown(
-            '<p class="section-header">📋 Section 1: Demographics</p>',
-            unsafe_allow_html=True,
+    # Most used app
+    if "app_category" in df.columns:
+        most_used_app = (
+            df["app_category"].mode().iloc[0]
+            if len(df["app_category"].mode()) > 0
+            else "N/A"
         )
+        most_used_app = most_used_app.replace("_", " ").title()
+    else:
+        most_used_app = "N/A"
 
-        col1, col2 = st.columns(2)
+    return {
+        "total_sessions": total_sessions,
+        "total_screen_time": total_screen_time,
+        "avg_session_duration": avg_session_duration,
+        "glance_rate": glance_rate,
+        "user_initiated_rate": user_initiated_rate,
+        "peak_hour": peak_hour,
+        "most_used_app": most_used_app,
+    }
+
+
+def render_overview_tab(
+    df: pd.DataFrame, schedule: dict, dimensions: dict, survey_summary: dict
+):
+    """Render the Overview tab with key metrics and summary."""
+    st.markdown(
+        '<p class="section-header">📊 Daily Summary</p>', unsafe_allow_html=True
+    )
+
+    metrics = render_summary_metrics(df, schedule)
+
+    if metrics:
+        col1, col2, col3, col4 = st.columns(4)
 
         with col1:
-            st.markdown("**Q1. How old are you?**")
-            age_range = st.selectbox(
-                "Age", AGE_OPTIONS, key="age", label_visibility="collapsed"
-            )
-
-            st.markdown("**Q2. What city do you currently live in?**")
-            city = st.text_input(
-                "City",
-                placeholder="e.g., San Francisco",
-                key="city",
-                label_visibility="collapsed",
+            st.metric(
+                "Total Sessions",
+                f"{metrics['total_sessions']}",
+                help="Total number of phone usage sessions",
             )
 
         with col2:
-            st.markdown("**Q3. What is your current occupation or primary role?**")
-            occupation = st.text_input(
-                "Occupation",
-                placeholder="e.g., Software Engineer",
-                key="occupation",
-                label_visibility="collapsed",
-            )
-
-            st.markdown("**Q4. Which best describes the area you live in?**")
-            area_type = st.selectbox(
-                "Area",
-                list(AREA_TYPE_OPTIONS.keys()),
-                key="area",
-                label_visibility="collapsed",
-            )
-
-        # ========== SECTION 2: Sleep & Chronotype ==========
-        st.markdown(
-            '<p class="section-header">🌙 Section 2: Sleep & Chronotype</p>',
-            unsafe_allow_html=True,
-        )
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.markdown("**Q5. What time do you usually wake up on weekdays?**")
-            wake_time = st.selectbox(
-                "Wake",
-                list(WAKE_TIME_OPTIONS.keys()),
-                key="wake",
-                label_visibility="collapsed",
-            )
-
-            st.markdown("**Q6. What time do you usually go to sleep on weekdays?**")
-            sleep_time = st.selectbox(
-                "Sleep",
-                list(SLEEP_TIME_OPTIONS.keys()),
-                key="sleep",
-                label_visibility="collapsed",
-            )
-
-        with col2:
-            st.markdown("**Q7. Are you a morning person or evening person?**")
-            chronotype = st.selectbox(
-                "Chronotype",
-                list(CHRONOTYPE_OPTIONS.keys()),
-                key="chronotype",
-                label_visibility="collapsed",
-            )
-
-            st.markdown("**Q8. When do you use your phone the most?**")
-            peak_usage = st.selectbox(
-                "Peak",
-                list(PEAK_USAGE_OPTIONS.keys()),
-                key="peak",
-                label_visibility="collapsed",
-            )
-
-        # ========== SECTION 3: Daily Structure ==========
-        st.markdown(
-            '<p class="section-header">🏠 Section 3: Daily Structure</p>',
-            unsafe_allow_html=True,
-        )
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.markdown("**Q9. How structured is your typical weekday?**")
-            routine = st.selectbox(
-                "Routine",
-                list(ROUTINE_OPTIONS.keys()),
-                key="routine",
-                label_visibility="collapsed",
-            )
-
-            st.markdown(
-                "**Q10. How many days per week do you commute to work/school?**"
-            )
-            commute_days = st.selectbox(
-                "Commute Days",
-                list(COMMUTE_DAYS_OPTIONS.keys()),
-                key="commute_days",
-                label_visibility="collapsed",
-            )
-
-            st.markdown("**Q11. What is your primary mode of commuting?**")
-            commute_mode = st.selectbox(
-                "Commute Mode",
-                list(COMMUTE_MODE_OPTIONS.keys()),
-                key="commute_mode",
-                label_visibility="collapsed",
-            )
-
-        with col2:
-            st.markdown("**Q12. How much time do you spend commuting daily (total)?**")
-            commute_time = st.selectbox(
-                "Commute Time",
-                list(COMMUTE_TIME_OPTIONS.keys()),
-                key="commute_time",
-                label_visibility="collapsed",
-            )
-
-            st.markdown("**Q13. How many days per week do you do physical exercise?**")
-            physical_activity = st.selectbox(
-                "Physical Activity",
-                list(PHYSICAL_ACTIVITY_OPTIONS.keys()),
-                key="physical_activity",
-                label_visibility="collapsed",
-            )
-
-        # ========== SECTION 4: Phone Usage Patterns ==========
-        st.markdown(
-            '<p class="section-header">📱 Section 4: Phone Usage Patterns</p>',
-            unsafe_allow_html=True,
-        )
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.markdown("**Q14. How much time do you spend on your phone daily?**")
-            screen_time = st.selectbox(
+            st.metric(
                 "Screen Time",
-                list(SCREEN_TIME_OPTIONS.keys()),
-                key="screen_time",
-                label_visibility="collapsed",
+                f"{metrics['total_screen_time']:.1f} min",
+                help="Total time spent on phone",
             )
 
-            st.markdown("**Q15. How often do you check your phone?**")
-            checking_frequency = st.selectbox(
-                "Checking Frequency",
-                list(CHECKING_FREQUENCY_OPTIONS.keys()),
-                key="checking_freq",
-                label_visibility="collapsed",
+        with col3:
+            st.metric(
+                "Avg Session",
+                f"{metrics['avg_session_duration']:.1f}s",
+                help="Average session duration in seconds",
             )
 
-            st.markdown("**Q16. What best describes your typical phone sessions?**")
-            session_type = st.selectbox(
-                "Session Type",
-                list(SESSION_TYPE_OPTIONS.keys()),
-                key="session_type",
-                label_visibility="collapsed",
+        with col4:
+            st.metric(
+                "Glance Rate",
+                f"{metrics['glance_rate']:.1f}%",
+                help="Percentage of quick glances vs engaged sessions",
             )
 
-        with col2:
-            st.markdown(
-                "**Q17. How often do you glance at your phone without unlocking?**"
-            )
-            glance_frequency = st.selectbox(
-                "Glance Frequency",
-                list(GLANCE_FREQUENCY_OPTIONS.keys()),
-                key="glance_freq",
-                label_visibility="collapsed",
+        col5, col6, col7, col8 = st.columns(4)
+
+        with col5:
+            st.metric(
+                "User Initiated",
+                f"{metrics['user_initiated_rate']:.1f}%",
+                help="Percentage of sessions initiated by user",
             )
 
-            st.markdown("**Q18. How restricted is phone use at your workplace?**")
-            work_restriction = st.selectbox(
-                "Work Restriction",
-                list(WORK_RESTRICTION_OPTIONS.keys()),
-                key="work_restriction",
-                label_visibility="collapsed",
+        with col6:
+            st.metric(
+                "Peak Hour",
+                f"{metrics['peak_hour']}:00",
+                help="Hour with most phone usage",
             )
 
-            st.markdown(
-                "**Q19. How do your evening phone sessions compare to daytime?**"
-            )
-            evening_change = st.selectbox(
-                "Evening Change",
-                list(EVENING_CHANGE_OPTIONS.keys()),
-                key="evening_change",
-                label_visibility="collapsed",
+        with col7:
+            st.metric(
+                "Top App",
+                metrics["most_used_app"],
+                help="Most frequently used app category",
             )
 
-        # ========== SECTION 5: App Preferences ==========
-        st.markdown(
-            '<p class="section-header">📲 Section 5: App Preferences</p>',
-            unsafe_allow_html=True,
-        )
-
-        st.markdown(
-            "**Q20. Which types of apps do you use most frequently?** (Select up to 5)"
-        )
-        top_apps = st.multiselect(
-            "Top Apps",
-            list(APP_CATEGORY_OPTIONS.keys()),
-            max_selections=5,
-            key="top_apps",
-            label_visibility="collapsed",
-        )
-
-        st.markdown(
-            "**Q21. What are your main reasons for using your phone?** (Select up to 5)"
-        )
-        usage_reasons = st.multiselect(
-            "Usage Reasons",
-            list(USAGE_REASON_OPTIONS.keys()),
-            max_selections=5,
-            key="usage_reasons",
-            label_visibility="collapsed",
-        )
-
-        st.markdown(
-            "**Q22. Do you prefer exploring new content or sticking to what you know?**"
-        )
-        exploration = st.selectbox(
-            "Exploration",
-            list(EXPLORATION_OPTIONS.keys()),
-            key="exploration",
-            label_visibility="collapsed",
-        )
-
-        # ========== SUBMIT ==========
-        st.markdown("---")
-
-        submitted = st.form_submit_button(
-            "🚀 Generate Persona", use_container_width=True, type="primary"
-        )
-
-        if submitted:
-            # Validate required fields
-            if not city:
-                st.error("Please enter your city.")
-                return
-            if not occupation:
-                st.error("Please enter your occupation.")
-                return
-            if len(top_apps) == 0:
-                st.error("Please select at least one app category.")
-                return
-            if len(usage_reasons) == 0:
-                st.error("Please select at least one usage reason.")
-                return
-
-            # Build payload
-            payload = {
-                "age_range": age_range,
-                "city": city,
-                "occupation": occupation,
-                "area_type": get_selection_value(AREA_TYPE_OPTIONS, area_type),
-                "wake_time": get_selection_value(WAKE_TIME_OPTIONS, wake_time),
-                "sleep_time": get_selection_value(SLEEP_TIME_OPTIONS, sleep_time),
-                "chronotype": get_selection_value(CHRONOTYPE_OPTIONS, chronotype),
-                "peak_usage_time": get_selection_value(PEAK_USAGE_OPTIONS, peak_usage),
-                "routine_level": get_selection_value(ROUTINE_OPTIONS, routine),
-                "commute_days": get_selection_value(COMMUTE_DAYS_OPTIONS, commute_days),
-                "commute_mode": get_selection_value(COMMUTE_MODE_OPTIONS, commute_mode),
-                "commute_time": get_selection_value(COMMUTE_TIME_OPTIONS, commute_time),
-                "physical_activity_days": get_selection_value(
-                    PHYSICAL_ACTIVITY_OPTIONS, physical_activity
-                ),
-                "screen_time": get_selection_value(SCREEN_TIME_OPTIONS, screen_time),
-                "checking_frequency": get_selection_value(
-                    CHECKING_FREQUENCY_OPTIONS, checking_frequency
-                ),
-                "session_type": get_selection_value(SESSION_TYPE_OPTIONS, session_type),
-                "glance_frequency": get_selection_value(
-                    GLANCE_FREQUENCY_OPTIONS, glance_frequency
-                ),
-                "work_phone_restriction": get_selection_value(
-                    WORK_RESTRICTION_OPTIONS, work_restriction
-                ),
-                "evening_usage_change": get_selection_value(
-                    EVENING_CHANGE_OPTIONS, evening_change
-                ),
-                "top_app_categories": multi_select_to_values(
-                    APP_CATEGORY_OPTIONS, top_apps
-                ),
-                "usage_reasons": multi_select_to_values(
-                    USAGE_REASON_OPTIONS, usage_reasons
-                ),
-                "exploration_preference": get_selection_value(
-                    EXPLORATION_OPTIONS, exploration
-                ),
-            }
-
-            # Call API
-            with st.spinner("🔄 Generating persona... This may take 30-60 seconds."):
-                result = generate_persona_api(payload)
-
-            if result:
-                st.session_state.generation_result = result
-                st.session_state.view_mode = "results"
-                # Update URL with persona ID
-                if "persona_id" in result:
-                    st.query_params["id"] = result["persona_id"]
-                st.success("✅ Persona generated successfully!")
-                st.rerun()
-
-
-# ============================================================
-# RESULTS PAGE
-# ============================================================
-
-
-def render_results_page():
-    """Render the results visualization page."""
-
-    result = st.session_state.generation_result
-
-    if not result:
-        st.warning("No persona data available. Please generate or load a persona.")
-        if st.button("Go to Survey"):
-            st.session_state.view_mode = "survey"
-            st.rerun()
-        return
-
-    # Extract data
-    persona_id = result.get("persona_id", "unknown")
-    dimensions = result.get("dimensions", {})
-    parameters = result.get("parameters", {})
-    schedule = result.get("schedule")
-    survey_summary = result.get("survey_summary", {})
-
-    # ========== HEADER ==========
-    st.markdown(f"## 📊 Persona Results")
-
-    col1, col2, col3 = st.columns([2, 2, 1])
-    with col1:
-        st.markdown(f"**ID:** `{persona_id}`")
-    with col2:
-        city = survey_summary.get("city", parameters.get("city", "N/A"))
-        occupation = survey_summary.get(
-            "occupation", parameters.get("occupation", "N/A")
-        )
-        st.markdown(f"**{city}** • {occupation}")
-    with col3:
-        if st.button("📋 Copy ID"):
-            st.write(f"```{persona_id}```")
+        with col8:
+            day_type = schedule.get("day_type", "N/A") if schedule else "N/A"
+            st.metric("Day Type", day_type.title(), help="Weekday or Weekend")
 
     st.divider()
 
-    # ========== TABS ==========
-    tab1, tab2, tab3, tab4 = st.tabs(
-        ["🎯 Dimensions", "⚙️ Parameters", "📅 Schedule", "📄 Raw JSON"]
+    # Two column layout for overview charts
+    col_left, col_right = st.columns(2)
+
+    with col_left:
+        fig = render_sessions_by_hour_line(df)
+        if fig:
+            st.plotly_chart(
+                fig, use_container_width=True, key="overview_sessions_by_hour"
+            )
+
+        fig = render_glance_vs_engaged_pie(df)
+        if fig:
+            st.plotly_chart(fig, use_container_width=True, key="overview_glance_pie")
+
+    with col_right:
+        fig = render_app_category_sessions_bar(df)
+        if fig:
+            st.plotly_chart(
+                fig, use_container_width=True, key="overview_app_category_bar"
+            )
+
+        fig = render_user_initiated_pie(df)
+        if fig:
+            st.plotly_chart(
+                fig, use_container_width=True, key="overview_user_initiated_pie"
+            )
+
+    # Persona info
+    st.markdown(
+        '<p class="section-header">👤 Persona Information</p>', unsafe_allow_html=True
     )
 
-    # ----- TAB 1: Dimensions -----
-    with tab1:
-        col1, col2 = st.columns([1.4, 0.6])
-
+    if survey_summary:
+        col1, col2, col3 = st.columns(3)
         with col1:
-            st.subheader("Behavioral Profile")
-            fig = render_dimensions_radar(dimensions)
-            st.plotly_chart(fig, use_container_width=True)
-
+            st.info(f"**City:** {survey_summary.get('city', 'N/A')}")
         with col2:
-            st.subheader("Dimension Values")
-            dim_df = pd.DataFrame(
-                [
-                    {
-                        "Dimension": k.replace("_", " ").title(),
-                        "Value": f"{v:.2f}",
-                        "Bar": "█" * int(v * 20) + "░" * (20 - int(v * 20)),
-                    }
-                    for k, v in dimensions.items()
-                ]
-            )
-            st.dataframe(dim_df, hide_index=True, use_container_width=True)
-
-    # ----- TAB 2: Parameters -----
-    with tab2:
-        col1, col2 = st.columns([1, 1])
-
-        with col1:
-            st.subheader("App Category Weights")
-            fig = render_app_weights_pie(parameters)
-            st.plotly_chart(fig, use_container_width=True)
-
-        with col2:
-            st.subheader("Timing Parameters")
-            val = parameters.get("mean_session_duration_seconds")
-            avg_duration = f"{val:.2f}" if isinstance(val, (int, float)) else "N/A"
-            timing_data = {
-                "Wake Hour": parameters.get("waking_hour_start", "N/A"),
-                "Sleep Hour": parameters.get("sleep_hour", "N/A"),
-                "Peak Hour": parameters.get("temporal_peak_hour", "N/A"),
-                "Sessions/Day": parameters.get("sessions_per_day", "N/A"),
-                "Avg Duration (s)": avg_duration,
-                "Late Night Prob": f"{parameters.get('late_night_probability', 0):.2f}",
-            }
-            for k, v in timing_data.items():
-                st.metric(k, v)
-
-        st.subheader("Hourly Usage Pattern")
-        fig = render_hourly_usage_pattern(parameters)
-        st.plotly_chart(fig, use_container_width=True)
-
-    # ----- TAB 3: Schedule -----
-    with tab3:
-        if schedule:
-            st.subheader("Daily Timeline")
-            fig = render_schedule_timeline(schedule)
-            if fig:
-                st.plotly_chart(fig, use_container_width=True)
-
-            st.subheader("Schedule Details")
-            df = render_schedule_detail_table(schedule)
-            if not df.empty:
-                st.dataframe(df, hide_index=True, use_container_width=True)
-        else:
-            st.info("No schedule data available for this persona.")
-
-    # ----- TAB 4: Raw JSON -----
-    with tab4:
-        st.subheader("Full Response Data")
-        st.json(result)
-
-        # Download button
-        json_str = json.dumps(result, indent=2)
-        st.download_button(
-            label="📥 Download JSON",
-            data=json_str,
-            file_name=f"persona_{persona_id}.json",
-            mime="application/json",
-        )
+            st.info(f"**Occupation:** {survey_summary.get('occupation', 'N/A')}")
+        with col3:
+            st.info(f"**Age Range:** {survey_summary.get('age_range', 'N/A')}")
 
 
-# ============================================================
-# MAIN
-# ============================================================
+def render_glances_tab(df: pd.DataFrame):
+    """Render the Glances Analysis tab."""
 
-
-def main():
-    """Main app entry point."""
-
-    # Render sidebar (handles navigation and loading)
-    render_sidebar()
-
-    # Main content area
     st.markdown(
-        '<h1 class="main-header">📱 Synthetic Persona Generator</h1>',
+        '<p class="section-header">👁️ Glance Behavior Analysis</p>',
         unsafe_allow_html=True,
     )
 
-    # Route based on view mode
-    if st.session_state.view_mode == "results" and st.session_state.generation_result:
-        render_results_page()
+    st.markdown(
+        """
+    **Glances** are quick phone checks (typically < 15 seconds) where users briefly look at their screen 
+    without engaging deeply with content. Understanding glance patterns reveals habitual checking behavior.
+    """
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        fig = render_glance_vs_engaged_pie(df)
+        if fig:
+            st.plotly_chart(fig, use_container_width=True, key="glances_glance_pie")
+
+        fig = render_glance_timeline(df)
+        if fig:
+            st.plotly_chart(fig, use_container_width=True, key="glances_timeline")
+
+    with col2:
+        fig = render_glance_duration_comparison(df)
+        if fig:
+            st.plotly_chart(
+                fig, use_container_width=True, key="glances_duration_comparison"
+            )
+
+        fig = render_glance_rate_by_app(df)
+        if fig:
+            st.plotly_chart(fig, use_container_width=True, key="glances_rate_by_app")
+
+    # Glance statistics
+    st.markdown(
+        '<p class="section-header">📈 Glance Statistics</p>', unsafe_allow_html=True
+    )
+
+    if not df.empty and "is_glance" in df.columns:
+        glances = df[df["is_glance"] == True]
+        engaged = df[df["is_glance"] == False]
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+            st.metric("Total Glances", len(glances))
+        with col2:
+            st.metric("Total Engaged", len(engaged))
+        with col3:
+            avg_glance_dur = (
+                glances["duration_seconds"].mean() if len(glances) > 0 else 0
+            )
+            st.metric("Avg Glance Duration", f"{avg_glance_dur:.1f}s")
+        with col4:
+            avg_engaged_dur = (
+                engaged["duration_seconds"].mean() if len(engaged) > 0 else 0
+            )
+            st.metric("Avg Engaged Duration", f"{avg_engaged_dur:.1f}s")
+
+
+def render_sessions_tab(df: pd.DataFrame):
+    """Render the Session Duration tab."""
+
+    st.markdown(
+        '<p class="section-header">⏱️ Session Duration Analysis</p>',
+        unsafe_allow_html=True,
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        fig = render_session_duration_histogram(df)
+        if fig:
+            st.plotly_chart(
+                fig, use_container_width=True, key="sessions_duration_histogram"
+            )
+
+        fig = render_time_between_sessions(df)
+        if fig:
+            st.plotly_chart(fig, use_container_width=True, key="sessions_time_between")
+
+    with col2:
+        fig = render_duration_by_app_box(df)
+        if fig:
+            st.plotly_chart(
+                fig, use_container_width=True, key="sessions_duration_by_app_box"
+            )
+
+        fig = render_session_burst_analysis(df)
+        if fig:
+            st.plotly_chart(
+                fig, use_container_width=True, key="sessions_burst_analysis"
+            )
+
+    # Top sessions table
+    st.markdown(
+        '<p class="section-header">🏆 Longest Sessions</p>', unsafe_allow_html=True
+    )
+
+    top_sessions = render_top_sessions_table(df)
+    if not top_sessions.empty:
+        st.dataframe(
+            top_sessions,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "timestamp": "Time",
+                "app_category": "App Category",
+                "duration": "Duration",
+                "activity": "Activity",
+                "context": "Context",
+                "location_label": "Location",
+            },
+        )
+
+
+def render_apps_tab(df: pd.DataFrame):
+    """Render the App Usage tab."""
+
+    st.markdown(
+        '<p class="section-header">📱 App Category Analysis</p>', unsafe_allow_html=True
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        fig = render_app_category_sessions_bar(df)
+        if fig:
+            st.plotly_chart(fig, use_container_width=True, key="apps_app_category_bar")
+
+        fig = render_user_initiated_by_app(df)
+        if fig:
+            st.plotly_chart(
+                fig, use_container_width=True, key="apps_user_initiated_by_app"
+            )
+
+    with col2:
+        fig = render_app_total_time_bar(df)
+        if fig:
+            st.plotly_chart(fig, use_container_width=True, key="apps_total_time_bar")
+
+        fig = render_glance_rate_by_app(df)
+        if fig:
+            st.plotly_chart(
+                fig, use_container_width=True, key="apps_glance_rate_by_app"
+            )
+
+    fig = render_app_heatmap_by_hour(df)
+    if fig:
+        st.plotly_chart(fig, use_container_width=True, key="apps_heatmap_by_hour")
+
+        # Full-width heatmap
+        st.markdown(
+            '<p class="section-header">🗓️ Hourly App Usage Heatmap</p>',
+            unsafe_allow_html=True,
+        )
+
+        fig = render_app_heatmap_by_hour(df)
+        if fig:
+            st.plotly_chart(fig, use_container_width=True)
+
+
+def render_temporal_tab(df: pd.DataFrame, schedule: dict):
+    """Render the Temporal Patterns tab."""
+
+    st.markdown(
+        '<p class="section-header">🕐 Temporal Usage Patterns</p>',
+        unsafe_allow_html=True,
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        fig = render_sessions_by_hour_line(df)
+        if fig:
+            st.plotly_chart(
+                fig, use_container_width=True, key="temporal_sessions_by_hour"
+            )
+
+        fig = render_glance_timeline(df)
+        if fig:
+            st.plotly_chart(
+                fig, use_container_width=True, key="temporal_glance_timeline"
+            )
+
+    with col2:
+        fig = render_activity_time_distribution(df)
+        if fig:
+            st.plotly_chart(
+                fig, use_container_width=True, key="temporal_activity_time_distribution"
+            )
+
+        fig = render_time_between_sessions(df)
+        if fig:
+            st.plotly_chart(
+                fig, use_container_width=True, key="temporal_time_between_sessions"
+            )
+
+    # Schedule segments visualization
+    if schedule and "segments" in schedule:
+        st.markdown(
+            '<p class="section-header">📅 Daily Schedule Segments</p>',
+            unsafe_allow_html=True,
+        )
+
+        segments = schedule.get("segments", [])
+        if segments:
+            segment_data = []
+            for seg in segments:
+                segment_data.append(
+                    {
+                        "Time": f"{seg.get('start_time', '')} - {seg.get('end_time', '')}",
+                        "Activity": seg.get("activity", "").replace("_", " ").title(),
+                        "Context": seg.get("context", "").replace("_", " ").title(),
+                        "Location": seg.get("location_label", "")
+                        .replace("_", " ")
+                        .title(),
+                    }
+                )
+
+            st.dataframe(
+                pd.DataFrame(segment_data), use_container_width=True, hide_index=True
+            )
+
+
+def render_context_tab(df: pd.DataFrame):
+    """Render the Context & Activity tab."""
+
+    st.markdown(
+        '<p class="section-header">🎯 Context & Activity Analysis</p>',
+        unsafe_allow_html=True,
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        fig = render_context_distribution_pie(df)
+        if fig:
+            st.plotly_chart(
+                fig, use_container_width=True, key="context_distribution_pie"
+            )
+
+        if "activity" in df.columns:
+            activity_counts = df["activity"].value_counts()
+            activity_labels = [
+                str(a).replace("_", " ").title() for a in activity_counts.index
+            ]
+
+            fig = go.Figure(
+                go.Bar(
+                    x=activity_counts.values,
+                    y=activity_labels,
+                    orientation="h",
+                    marker_color=px.colors.qualitative.Pastel,
+                )
+            )
+            fig.update_layout(
+                title="Sessions by Activity",
+                xaxis_title="Session Count",
+                height=350,
+                margin=dict(l=150),
+            )
+            st.plotly_chart(
+                fig, use_container_width=True, key="context_sessions_by_activity"
+            )
+
+    with col2:
+        fig = render_activity_breakdown_bar(df)
+        if fig:
+            st.plotly_chart(
+                fig, use_container_width=True, key="context_activity_breakdown"
+            )
+
+        fig = render_user_initiated_pie(df)
+        if fig:
+            st.plotly_chart(
+                fig, use_container_width=True, key="context_user_initiated_pie"
+            )
+
+    # Context-specific metrics
+    st.markdown(
+        '<p class="section-header">📊 Usage by Context</p>', unsafe_allow_html=True
+    )
+
+    if "context" in df.columns:
+        context_stats = (
+            df.groupby("context")
+            .agg({"duration_seconds": ["count", "mean", "sum"], "is_glance": "mean"})
+            .round(2)
+        )
+        context_stats.columns = [
+            "Sessions",
+            "Avg Duration (s)",
+            "Total Time (s)",
+            "Glance Rate",
+        ]
+        context_stats["Total Time (min)"] = (
+            context_stats["Total Time (s)"] / 60
+        ).round(1)
+        context_stats["Glance Rate"] = (context_stats["Glance Rate"] * 100).round(
+            1
+        ).astype(str) + "%"
+        context_stats.index = context_stats.index.str.replace("_", " ").str.title()
+
+        st.dataframe(
+            context_stats[
+                ["Sessions", "Avg Duration (s)", "Total Time (min)", "Glance Rate"]
+            ],
+            use_container_width=True,
+        )
+
+
+def render_location_tab(df: pd.DataFrame) -> None:
+    """Render the Location Analysis tab."""
+
+    st.markdown(
+        '<p class="section-header">📍 Location-Based Analysis</p>',
+        unsafe_allow_html=True,
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        fig = render_location_sessions_bar(df)
+        if fig:
+            st.plotly_chart(fig, use_container_width=True, key="location_sessions_bar")
+
+        if "location_label" in df.columns and "duration_seconds" in df.columns:
+            grouped = df.groupby("location_label")["duration_seconds"].sum()
+            time_by_loc = pd.Series(grouped, dtype="float64") / 60.0
+            time_by_loc = cast(pd.Series, time_by_loc.sort_values(ascending=True))
+
+            location_labels = (
+                pd.Index(time_by_loc.index)
+                .astype("string")
+                .str.replace("_", " ", regex=False)
+                .str.title()
+            )
+
+            fig = go.Figure(
+                go.Bar(
+                    x=time_by_loc.to_numpy(),
+                    y=location_labels.to_list(),
+                    orientation="h",
+                    marker_color="#2ecc71",
+                    text=[f"{v:.1f} min" for v in time_by_loc.to_list()],
+                    textposition="outside",
+                )
+            )
+            fig.update_layout(
+                title="Screen Time by Location",
+                xaxis_title="Time (minutes)",
+                height=350,
+                margin=dict(l=120),
+            )
+            st.plotly_chart(
+                fig, use_container_width=True, key="location_screen_time_bar"
+            )
+
+    with col2:
+        fig = render_location_map(df)
+        if fig:
+            st.plotly_chart(fig, use_container_width=True, key="location_map")
+
+
+def render_dimensions_tab(dimensions: dict):
+    """Render the Behavioral Dimensions tab."""
+
+    st.markdown(
+        '<p class="section-header">🧠 Behavioral Dimensions Profile</p>',
+        unsafe_allow_html=True,
+    )
+
+    col1, col2 = st.columns([1, 1.5])
+
+    with col1:
+        fig = render_dimensions_radar(dimensions)
+        if fig:
+            st.plotly_chart(fig, use_container_width=True, key="dimensions_radar")
+
+    with col2:
+        st.markdown("### Dimension Details")
+
+        # Grid of gauges
+        g_col1, g_col2 = st.columns(2)
+
+        dimension_info = [
+            ("usage_intensity", "Usage Intensity", "Light", "Heavy"),
+            ("chronotype_score", "Chronotype", "Morning", "Evening"),
+            ("attentional_granularity", "Attentional Granularity", "Broad", "Focused"),
+            ("contextual_sensitivity", "Contextual Sensitivity", "Low", "High"),
+            ("social_orientation", "Social Orientation", "Individual", "Social"),
+            ("mobility_diversity", "Mobility Diversity", "Static", "Mobile"),
+            ("routine_stability", "Routine Stability", "Variable", "Stable"),
+            ("novelty_seeking", "Novelty Seeking", "Habitual", "Exploratory"),
+        ]
+
+        for i, (key, label, low, high) in enumerate(dimension_info):
+            if key in dimensions:
+                with g_col1 if i % 2 == 0 else g_col2:
+                    fig = render_dimension_gauge(label, dimensions[key], low, high)
+                    st.plotly_chart(
+                        fig, use_container_width=True, key=f"dimensions_gauge_{key}"
+                    )
+
+
+def render_results():
+    """Render the results dashboard."""
+    result = st.session_state.generation_result
+    if not result:
+        st.warning("No persona data available. Please generate one first.")
+        return
+
+    persona_id = result.get("persona_id", "Unknown")
+    st.markdown(
+        f'<p class="main-header">📊 Persona: {persona_id[:8]}...</p>',
+        unsafe_allow_html=True,
+    )
+
+    # Extract data
+    schedule = result.get("schedule", {})
+    dimensions = result.get("dimensions", {})
+    survey_summary = result.get("survey_summary", {})
+
+    df = get_sessions_df(schedule)
+
+    if df.empty:
+        st.error("No session data found in the generated persona.")
+        return
+
+    # Tabs for different analyses
+    tabs = st.tabs(
+        [
+            "📊 Overview",
+            "🧠 Dimensions",
+            "👁️ Glances",
+            "⏱️ Sessions",
+            "📱 Apps",
+            "🕐 Temporal",
+            "🎯 Context",
+            "📍 Location",
+        ]
+    )
+
+    with tabs[0]:
+        render_overview_tab(df, schedule, dimensions, survey_summary)
+
+    with tabs[1]:
+        render_dimensions_tab(dimensions)
+
+    with tabs[2]:
+        render_glances_tab(df)
+
+    with tabs[3]:
+        render_sessions_tab(df)
+
+    with tabs[4]:
+        render_apps_tab(df)
+
+    with tabs[5]:
+        render_temporal_tab(df, schedule)
+
+    with tabs[6]:
+        render_context_tab(df)
+
+    with tabs[7]:
+        render_location_tab(df)
+
+
+def render_survey_form():
+    """Render the survey form for generating a new persona."""
+
+    st.markdown(
+        '<p class="main-header">📝 Persona Generation Survey</p>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "Fill out the details below to generate a realistic synthetic smartphone usage persona."
+    )
+
+    with st.form("survey_form"):
+        # Section 1: Demographics
+        st.markdown(
+            '<p class="section-header">👤 Demographics</p>', unsafe_allow_html=True
+        )
+        col1, col2 = st.columns(2)
+        with col1:
+            city = st.text_input(
+                "City", value="San Francisco", help="Where does the persona live?"
+            )
+            occupation = st.text_input("Occupation", value="Software Engineer")
+        with col2:
+            age_range = st.selectbox("Age Range", options=AGE_OPTIONS, index=1)
+            area_type = st.selectbox(
+                "Area Type", options=list(AREA_TYPE_OPTIONS.keys())
+            )
+
+        # Section 2: Sleep & Chronotype
+        st.markdown(
+            '<p class="section-header">😴 Sleep & Chronotype</p>',
+            unsafe_allow_html=True,
+        )
+        col1, col2 = st.columns(2)
+        with col1:
+            wake_time = st.selectbox(
+                "Typical Wake Time", options=list(WAKE_TIME_OPTIONS.keys()), index=1
+            )
+            sleep_time = st.selectbox(
+                "Typical Sleep Time", options=list(SLEEP_TIME_OPTIONS.keys()), index=1
+            )
+        with col2:
+            chronotype = st.selectbox(
+                "Chronotype", options=list(CHRONOTYPE_OPTIONS.keys()), index=2
+            )
+            peak_usage = st.selectbox(
+                "Peak Usage Time", options=list(PEAK_USAGE_OPTIONS.keys()), index=2
+            )
+
+        # Section 3: Daily Routine
+        st.markdown(
+            '<p class="section-header">📅 Daily Routine</p>', unsafe_allow_html=True
+        )
+        col1, col2 = st.columns(2)
+        with col1:
+            routine_level = st.selectbox(
+                "Routine Structure", options=list(ROUTINE_OPTIONS.keys()), index=1
+            )
+            places_visited = st.slider("Typical places visited daily", 1, 10, 3)
+            physical_activity = st.selectbox(
+                "Physical activity (days/week)",
+                options=list(PHYSICAL_ACTIVITY_OPTIONS.keys()),
+                index=1,
+            )
+        with col2:
+            commute_days = st.selectbox(
+                "Commute Frequency (days/week)",
+                options=list(COMMUTE_DAYS_OPTIONS.keys()),
+                index=2,
+            )
+            commute_mode = st.selectbox(
+                "Primary Commute Mode",
+                options=list(COMMUTE_MODE_OPTIONS.keys()),
+                index=0,
+            )
+            commute_time = st.selectbox(
+                "Typical Commute Time (one way)",
+                options=list(COMMUTE_TIME_OPTIONS.keys()),
+                index=2,
+            )
+
+        # Section 4: Phone Usage Habits
+        st.markdown(
+            '<p class="section-header">📱 Phone Usage Habits</p>',
+            unsafe_allow_html=True,
+        )
+        col1, col2 = st.columns(2)
+        with col1:
+            screen_time = st.selectbox(
+                "Estimated Daily Screen Time",
+                options=list(SCREEN_TIME_OPTIONS.keys()),
+                index=2,
+            )
+            checking_freq = st.selectbox(
+                "Phone Checking Frequency",
+                options=list(CHECKING_FREQUENCY_OPTIONS.keys()),
+                index=2,
+            )
+            glance_freq = st.selectbox(
+                "Glance Frequency",
+                options=list(GLANCE_FREQUENCY_OPTIONS.keys()),
+                index=1,
+            )
+        with col2:
+            session_type = st.selectbox(
+                "Typical Session Type",
+                options=list(SESSION_TYPE_OPTIONS.keys()),
+                index=4,
+            )
+            work_restriction = st.selectbox(
+                "Phone Use Restriction at Work",
+                options=list(WORK_RESTRICTION_OPTIONS.keys()),
+                index=1,
+            )
+            evening_change = st.selectbox(
+                "Evening Usage Change",
+                options=list(EVENING_CHANGE_OPTIONS.keys()),
+                index=2,
+            )
+
+        # Section 5: App Preferences
+        st.markdown(
+            '<p class="section-header">🔍 App Preferences</p>', unsafe_allow_html=True
+        )
+        top_apps = st.multiselect(
+            "Top App Categories (select 3-5)",
+            options=list(APP_CATEGORY_OPTIONS.keys()),
+            default=list(APP_CATEGORY_OPTIONS.keys())[:3],
+        )
+        usage_reasons = st.multiselect(
+            "Primary Reasons for Using Phone",
+            options=list(USAGE_REASON_OPTIONS.keys()),
+            default=list(USAGE_REASON_OPTIONS.keys())[:2],
+        )
+        exploration = st.selectbox(
+            "App Exploration Style", options=list(EXPLORATION_OPTIONS.keys()), index=1
+        )
+
+        st.divider()
+
+        # Generation options
+        col1, col2 = st.columns(2)
+        with col1:
+            day_type = st.radio(
+                "Generate for which day type?",
+                options=["weekday", "weekend"],
+                horizontal=True,
+            )
+
+        submit = st.form_submit_button(
+            "🚀 Generate Synthetic Persona", use_container_width=True
+        )
+
+        if submit:
+            if not city or not occupation:
+                st.error("Please fill in city and occupation.")
+            elif len(top_apps) < 1:
+                st.error("Please select at least one app category.")
+            else:
+                # Prepare payload
+                payload = {
+                    "city": city,
+                    "occupation": occupation,
+                    "age_range": age_range,
+                    "area_type": AREA_TYPE_OPTIONS[area_type],
+                    "wake_time": WAKE_TIME_OPTIONS[wake_time],
+                    "sleep_time": SLEEP_TIME_OPTIONS[sleep_time],
+                    "chronotype": CHRONOTYPE_OPTIONS[chronotype],
+                    "peak_usage_time": PEAK_USAGE_OPTIONS[peak_usage],
+                    "routine_level": ROUTINE_OPTIONS[routine_level],
+                    "places_visited_daily": places_visited,
+                    "physical_activity_days": PHYSICAL_ACTIVITY_OPTIONS[
+                        physical_activity
+                    ],
+                    "commute_days": COMMUTE_DAYS_OPTIONS[commute_days],
+                    "commute_mode": COMMUTE_MODE_OPTIONS[commute_mode],
+                    "commute_time": COMMUTE_TIME_OPTIONS[commute_time],
+                    "screen_time": SCREEN_TIME_OPTIONS[screen_time],
+                    "checking_frequency": CHECKING_FREQUENCY_OPTIONS[checking_freq],
+                    "glance_frequency": GLANCE_FREQUENCY_OPTIONS[glance_freq],
+                    "session_type": SESSION_TYPE_OPTIONS[session_type],
+                    "work_phone_restriction": WORK_RESTRICTION_OPTIONS[
+                        work_restriction
+                    ],
+                    "evening_usage_change": EVENING_CHANGE_OPTIONS[evening_change],
+                    "top_app_categories": [
+                        APP_CATEGORY_OPTIONS[app] for app in top_apps
+                    ],
+                    "usage_reasons": [USAGE_REASON_OPTIONS[r] for r in usage_reasons],
+                    "exploration_preference": EXPLORATION_OPTIONS[exploration],
+                    "day_type": day_type,
+                }
+
+                with st.spinner("Generating persona... This may take a moment."):
+                    result = generate_persona_api(payload)
+                    if result:
+                        st.session_state.generation_result = normalize_persona_data(
+                            result
+                        )
+                        st.session_state.view_mode = "results"
+                        st.query_params["id"] = result.get("persona_id", "")
+                        st.success("✅ Persona generated successfully!")
+                        st.rerun()
+
+
+def main():
+    render_sidebar()
+
+    if st.session_state.view_mode == "survey":
+        render_survey_form()
     else:
-        render_survey_page()
+        render_results()
 
 
 if __name__ == "__main__":
