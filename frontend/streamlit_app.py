@@ -571,7 +571,7 @@ def render_hourly_usage_pattern(parameters: dict) -> go.Figure:
     """Bar chart of predicted hourly usage."""
 
     waking_start = parameters.get("waking_hour_start", 7)
-    waking_end = parameters.get("waking_hour_end", 23)
+    waking_end = parameters.get("sleep_hour", 23)
     peak_hour = parameters.get("temporal_peak_hour", 20)
     late_night_prob = parameters.get("late_night_probability", 0.1)
 
@@ -1151,14 +1151,14 @@ def render_results_page():
 
         with col2:
             st.subheader("Timing Parameters")
+            val = parameters.get("mean_session_duration_seconds")
+            avg_duration = f"{val:.2f}" if isinstance(val, (int, float)) else "N/A"
             timing_data = {
                 "Wake Hour": parameters.get("waking_hour_start", "N/A"),
-                "Sleep Hour": parameters.get("waking_hour_end", "N/A"),
+                "Sleep Hour": parameters.get("sleep_hour", "N/A"),
                 "Peak Hour": parameters.get("temporal_peak_hour", "N/A"),
                 "Sessions/Day": parameters.get("sessions_per_day", "N/A"),
-                "Avg Duration (s)": parameters.get(
-                    "avg_session_duration_seconds", "N/A"
-                ),
+                "Avg Duration (s)": avg_duration,
                 "Late Night Prob": f"{parameters.get('late_night_probability', 0):.2f}",
             }
             for k, v in timing_data.items():
