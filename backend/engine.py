@@ -25,6 +25,7 @@ import numpy as np
 from collections import defaultdict
 import uuid
 import json
+from agent import LLMContextEnhancer
 
 # Import all models from models.py
 from models import (
@@ -1356,6 +1357,7 @@ class ScheduleGenerator:
         parameters: BehavioralParameters,
         date: str,
         day_type: Literal["weekday", "weekend"] = "weekday",
+        context_modifiers: Optional[dict] = None,
     ) -> DailySchedule:
         """
         Generate a complete daily schedule.
@@ -1370,7 +1372,9 @@ class ScheduleGenerator:
             DailySchedule with all segments populated
         """
         if day_type == "weekday":
-            segments = self._generate_weekday_schedule(survey, parameters)
+            segments = self._generate_weekday_schedule(
+                survey, parameters, context_modifiers
+            )
         else:
             segments = self._generate_weekend_schedule(survey, parameters)
 
@@ -1965,7 +1969,6 @@ class SessionPopulator:
 
         # Convert interval from minutes to work within segment
         mean_interval = parameters.mean_inter_session_interval_minutes
-        segment_duration = end_minutes - start_minutes
 
         # Gamma parameters (shape=2 gives realistic right-skewed distribution)
         shape = 2.0
@@ -2125,17 +2128,23 @@ class BehaviorSimulationEngine:
     All transformations are literature-grounded and documented.
     """
 
-    def __init__(self, seed: Optional[int] = None):
+    def __init__(
+        self,
+        seed: Optional[int] = None,
+        llm_client: Optional[Any] = None,
+    ):
         """
         Initialize the simulation engine.
 
         Args:
             seed: Random seed for reproducibility
+            llm_client: Optional LLM client for contextual day variation
         """
         self.dimension_extractor = DimensionExtractor()
         self.parameter_deriver = ParameterDeriver()
         self.schedule_generator = ScheduleGenerator(seed)
         self.session_populator = SessionPopulator(seed)
+        self.context_enhancer = LLMContextEnhancer(llm_client)
         self.seed = seed
 
     def process_survey(
@@ -2178,10 +2187,21 @@ class BehaviorSimulationEngine:
         Returns:
             Tuple of (DailySchedule, List[PhoneSession])
         """
-        # Generate schedule
-        schedule = self.schedule_generator.generate(survey, parameters, date, day_type)
+        day_context = self.context_enhancer.get_day_context(
+            survey=survey,
+            dimensions=dimensions,
+            day_type=day_type,
+            date_str=date,
+        )
 
-        # Populate with sessions
+        schedule = self.schedule_generator.generate(
+            survey=survey,
+            parameters=parameters,
+            date=date,
+            day_type=day_type,
+            context_modifiers=day_context.get("context_modifiers"),
+        )
+
         sessions = self.session_populator.populate(schedule, parameters, dimensions)
 
         return schedule, sessions
@@ -2209,14 +2229,17 @@ class BehaviorSimulationEngine:
         for i in range(7):
             current_date = base_date + timedelta(days=i)
             date_str = current_date.strftime("%Y-%m-%d")
-            # Determine day type (0=Monday, 5=Saturday, 6=Sunday)
             day_of_week = current_date.weekday()
             day_type = "weekend" if day_of_week >= 5 else "weekday"
 
-            schedule, sessions = self.generate_day(
-                survey, parameters, dimensions, date_str, day_type
+            daily_result = self.generate_day(
+                survey=survey,
+                parameters=parameters,
+                dimensions=dimensions,
+                date=date_str,
+                day_type=day_type,
             )
-            results.append((schedule, sessions))
+            results.append(daily_result)
 
         return results
 
@@ -2690,12 +2713,13 @@ class PersonaEngine:
     This is the primary interface used by the API server.
     """
 
-    def __init__(self):
+    def __init__(self, llm_client: Optional[Any] = None):
         """Initialize the engine components."""
         self.dimension_extractor = DimensionExtractor()
         self.parameter_deriver = ParameterDeriver()
         self.schedule_generator = ScheduleGenerator()
         self.session_populator = SessionPopulator()
+        self.context_enhancer = LLMContextEnhancer(llm_client)
 
     def generate_persona(
         self, survey: ComprehensiveSurveyInput
@@ -2746,22 +2770,31 @@ class PersonaEngine:
         date_str = target_date.isoformat()
 
         try:
-            # Step 1: Generate the daily schedule structure
+            # Step 1: Generate contextual modifiers for this day
+            day_context = self.context_enhancer.get_day_context(
+                survey=survey,
+                dimensions=dimensions,
+                day_type=day_type,
+                date_str=date_str,
+            )
+            # TODO --- LLM Call
+            # Step 2: Generate the daily schedule structure
             schedule = self.schedule_generator.generate(
                 survey=survey,
                 parameters=parameters,
                 date=date_str,
                 day_type=day_type,
+                context_modifiers=day_context.get("context_modifiers"),
             )
 
-            # Step 2: Populate with phone sessions
+            # Step 3: Populate with phone sessions
             sessions = self.session_populator.populate(
                 schedule=schedule,
                 parameters=parameters,
                 dimensions=dimensions,
             )
-
-            # Step 3: Create final DailySchedule with sessions
+            # TODO --- LLM Call
+            # Step 4: Create final DailySchedule with sessions
             final_schedule = DailySchedule(
                 date=date_str,
                 day_type=day_type,

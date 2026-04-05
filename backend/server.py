@@ -20,8 +20,11 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, status, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 import uvicorn
+from dotenv import load_dotenv
+from langchain_groq import ChatGroq
+from langchain_openai import ChatOpenAI
 
 # Import database functions
 from database import (
@@ -117,10 +120,12 @@ async def lifespan(app: FastAPI):
 
     # Initialize engine
     try:
-        engine = PersonaEngine()
-        print("✅ PersonaEngine initialized")
+        llm_client = create_llm_client()
+        engine = PersonaEngine(llm_client=llm_client)
+        print("✅ PersonaEngine initialized with LLM context enhancer")
     except Exception as e:
         print(f"⚠️ Engine initialization warning: {e}")
+        print("⚠️ Falling back to rule-based context enhancer")
         engine = PersonaEngine()
 
     yield
@@ -415,6 +420,27 @@ async def delete_all_personas_endpoint(_: bool = Depends(require_admin)):
         "message": "All personas deleted",
         "deleted_count": deleted,
     }
+
+
+def create_llm_client() -> ChatGroq:
+    """Create the chat model used for contextual day variation."""
+    load_dotenv()
+
+    api_key = os.getenv("GROQ_API_KEY")
+    # api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GROQ_API_KEY not found in environment or .env file")
+
+    return ChatGroq(
+        model="llama-3.3-70b-versatile",
+        api_key=SecretStr(api_key),
+        temperature=0.3,
+    )
+
+    # return ChatOpenAI(
+    #     model="gpt-4.1-mini",
+    #     temperature=0,
+    # )
 
 
 # ============================================================

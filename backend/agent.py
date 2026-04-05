@@ -1,6 +1,9 @@
-# Add to engine.py
+import json
+import re
+from typing import Any, Optional
 
-
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import HumanMessage
 from models import (
     AreaType,
     BehavioralDimensions,
@@ -194,8 +197,13 @@ class LLMContextEnhancer:
     Optional component that uses LLM to add realistic daily variation.
     """
 
-    def __init__(self, llm_client=None):
-        self.llm_client = llm_client  # Optional LLM client
+    def __init__(
+        self, llm_client: Optional[BaseChatModel] = None, seed: int | None = None
+    ):
+        self.llm_client = llm_client
+        import random
+
+        self._random = random.Random(seed)
 
     def get_day_context(
         self,
@@ -220,9 +228,11 @@ class LLMContextEnhancer:
         prompt = ContextProfile.build_llm_prompt(profile, day_type, date_str)
 
         # Call LLM (implementation depends on your LLM client)
+        # Call LLM (implementation depends on your LLM client)
         try:
-            response = self.llm_client.generate(prompt)
-            return self._parse_llm_response(response)
+            response = self.llm_client.invoke([HumanMessage(content=prompt)])
+            response_text = self._content_to_text(response.content)
+            return self._parse_llm_response(response_text)
         except Exception:
             return self._rule_based_context(profile, day_type, date_str)
 
@@ -237,9 +247,9 @@ class LLMContextEnhancer:
         if profile["commute_pattern"] == "remote_only":
             commutes_today = False
         elif profile["commute_pattern"] == "hybrid_minimal":
-            commutes_today = random.random() < 0.25  # ~1-2 days/week
+            commutes_today = self._random.random() < 0.25  # ~1-2 days/week
         elif profile["commute_pattern"] == "hybrid_regular":
-            commutes_today = random.random() < 0.70  # ~3-4 days/week
+            commutes_today = self._random.random() < 0.70  # ~3-4 days/week
         # office_full_time stays True
 
         if day_type == "weekend":
@@ -256,3 +266,84 @@ class LLMContextEnhancer:
                 "commutes_today": commutes_today,
             },
         }
+
+    def _parse_llm_response(self, response_text: str) -> dict:
+        """
+        Parse LLM JSON output and validate required fields.
+        Falls back to a safe structure if parsing fails.
+        """
+        try:
+            text = response_text.strip()
+
+            # Handle fenced JSON
+            if text.startswith("```"):
+                match = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
+                if match:
+                    text = match.group(1).strip()
+
+            data = json.loads(text)
+
+            day_variation = str(data.get("day_variation", "typical_day"))
+            context_modifiers = data.get("context_modifiers", {})
+
+            parsed = {
+                "day_variation": day_variation,
+                "context_modifiers": {
+                    "work_intensity": float(
+                        context_modifiers.get("work_intensity", 1.0)
+                    ),
+                    "social_evening": bool(
+                        context_modifiers.get("social_evening", False)
+                    ),
+                    "exercise_today": bool(
+                        context_modifiers.get("exercise_today", False)
+                    ),
+                    "errands_needed": bool(
+                        context_modifiers.get("errands_needed", False)
+                    ),
+                    "commutes_today": bool(
+                        context_modifiers.get("commutes_today", True)
+                    ),
+                },
+            }
+
+            parsed["context_modifiers"]["work_intensity"] = max(
+                0.5, min(1.5, parsed["context_modifiers"]["work_intensity"])
+            )
+
+            return parsed
+        except Exception:
+            return {
+                "day_variation": "typical_day",
+                "context_modifiers": {
+                    "work_intensity": 1.0,
+                    "social_evening": False,
+                    "exercise_today": False,
+                    "errands_needed": False,
+                    "commutes_today": True,
+                },
+            }
+
+    def _content_to_text(self, content: Any) -> str:
+        """
+        Normalize LangChain message content into a plain string.
+        """
+        if isinstance(content, str):
+            return content
+
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict):
+                    text_value = item.get("text")
+                    if isinstance(text_value, str):
+                        parts.append(text_value)
+                    else:
+                        parts.append(json.dumps(item))
+                else:
+                    parts.append(str(item))
+            return "\n".join(parts)
+
+        return str(content)
