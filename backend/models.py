@@ -241,14 +241,14 @@ class ComprehensiveSurveyInput(BaseModel):
     # --- Section 5: App & Content Preferences (Q21-Q25) ---
     evening_activities_increase: List[AppCategory] = Field(
         min_length=1,
-        max_length=3,
+        max_length=5,
         description="Q21: Activities that increase in evening (1-3 required)",
     )
     usage_reasons: List[UsageReason] = Field(
-        max_length=3, description="Q22: Most common reasons for phone use (up to 3)"
+        max_length=5, description="Q22: Most common reasons for phone use (up to 3)"
     )
     commute_activities: List[AppCategory] = Field(
-        max_length=3, description="Q23: Phone activities during commute (up to 3)"
+        max_length=5, description="Q23: Phone activities during commute (up to 3)"
     )
     most_used_categories: List[AppCategory] = Field(
         max_length=5, description="Q24: Most used app categories (up to 5)"

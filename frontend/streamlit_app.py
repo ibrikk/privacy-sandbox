@@ -1973,7 +1973,7 @@ def render_survey_form():
             routine_level = st.selectbox(
                 "Routine Structure", options=list(ROUTINE_OPTIONS.keys()), index=1
             )
-            places_visited = st.slider("Typical places visited daily", 1, 10, 3)
+            places_visited = st.slider("Typical places visited daily", 1, 6, 3)
             physical_activity = st.selectbox(
                 "Physical activity (days/week)",
                 options=list(PHYSICAL_ACTIVITY_OPTIONS.keys()),
@@ -2076,35 +2076,50 @@ def render_survey_form():
             else:
                 # Prepare payload
                 payload = {
-                    "city": city,
-                    "occupation": occupation,
-                    "age_range": age_range,
-                    "area_type": AREA_TYPE_OPTIONS[area_type],
-                    "wake_time": WAKE_TIME_OPTIONS[wake_time],
-                    "sleep_time": SLEEP_TIME_OPTIONS[sleep_time],
-                    "chronotype": CHRONOTYPE_OPTIONS[chronotype],
-                    "peak_usage_time": PEAK_USAGE_OPTIONS[peak_usage],
-                    "routine_level": ROUTINE_OPTIONS[routine_level],
-                    "places_visited_daily": places_visited,
-                    "physical_activity_days": PHYSICAL_ACTIVITY_OPTIONS[
-                        physical_activity
-                    ],
-                    "commute_days": COMMUTE_DAYS_OPTIONS[commute_days],
-                    "commute_mode": COMMUTE_MODE_OPTIONS[commute_mode],
-                    "commute_time": COMMUTE_TIME_OPTIONS[commute_time],
-                    "screen_time": SCREEN_TIME_OPTIONS[screen_time],
-                    "checking_frequency": CHECKING_FREQUENCY_OPTIONS[checking_freq],
-                    "glance_frequency": GLANCE_FREQUENCY_OPTIONS[glance_freq],
-                    "session_type": SESSION_TYPE_OPTIONS[session_type],
-                    "work_phone_restriction": WORK_RESTRICTION_OPTIONS[
-                        work_restriction
-                    ],
-                    "evening_usage_change": EVENING_CHANGE_OPTIONS[evening_change],
-                    "top_app_categories": [
-                        APP_CATEGORY_OPTIONS[app] for app in top_apps
-                    ],
-                    "usage_reasons": [USAGE_REASON_OPTIONS[r] for r in usage_reasons],
-                    "exploration_preference": EXPLORATION_OPTIONS[exploration],
+                    "survey": {
+                        "age_range": age_range,
+                        "city": city,
+                        "occupation": occupation,
+                        "area_type": AREA_TYPE_OPTIONS[area_type],
+                        "wake_time": WAKE_TIME_OPTIONS[wake_time],
+                        "sleep_time": SLEEP_TIME_OPTIONS[sleep_time],
+                        "chronotype_self_report": CHRONOTYPE_OPTIONS[chronotype],
+                        "peak_usage_time": PEAK_USAGE_OPTIONS[peak_usage],
+                        "routine_structure": ROUTINE_OPTIONS[routine_level],
+                        "places_visited_daily": min(
+                            places_visited, 6
+                        ),  # backend allows 1..6
+                        "commute_days": COMMUTE_DAYS_OPTIONS[commute_days],
+                        "commute_mode": COMMUTE_MODE_OPTIONS[commute_mode],
+                        "physical_activity_days": PHYSICAL_ACTIVITY_OPTIONS[
+                            physical_activity
+                        ],
+                        "commute_time": COMMUTE_TIME_OPTIONS[commute_time],
+                        "daily_screen_time": SCREEN_TIME_OPTIONS[screen_time],
+                        "checking_frequency": CHECKING_FREQUENCY_OPTIONS[checking_freq],
+                        "session_type": SESSION_TYPE_OPTIONS[session_type],
+                        "glance_frequency": GLANCE_FREQUENCY_OPTIONS[glance_freq],
+                        "work_phone_restriction": WORK_RESTRICTION_OPTIONS[
+                            work_restriction
+                        ],
+                        "evening_session_change": EVENING_CHANGE_OPTIONS[
+                            evening_change
+                        ],
+                        "evening_activities_increase": [
+                            APP_CATEGORY_OPTIONS[app] for app in top_apps
+                        ],
+                        "usage_reasons": [
+                            USAGE_REASON_OPTIONS[r] for r in usage_reasons
+                        ],
+                        "commute_activities": [],
+                        "most_used_categories": [
+                            APP_CATEGORY_OPTIONS[app] for app in top_apps
+                        ],
+                        "exploration_style": EXPLORATION_OPTIONS[exploration],
+                        "top_apps": ", ".join(top_apps),
+                        "important_habit": None,
+                    },
+                    "generate_schedule": True,
                     "day_type": day_type,
                 }
 
