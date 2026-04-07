@@ -2269,17 +2269,12 @@ class SessionPopulator:
 
     def _calculate_peak_factor(self, hour: int, peak_hour: int) -> float:
         """
-        Calculate temporal peak adjustment factor.
-
-        Source: Roehrick et al. (2023) - diurnal patterns
-        Uses Gaussian centered on peak hour.
+        Calculate stronger temporal peak adjustment factor.
         """
-        # Gaussian with sigma=4 hours
         distance = min(abs(hour - peak_hour), 24 - abs(hour - peak_hour))
-        factor = np.exp(-(distance**2) / (2 * 4**2))
+        factor = np.exp(-(distance**2) / (2 * 2.5**2))
 
-        # Scale to range [0.5, 1.5]
-        return 0.5 + factor
+        return 0.2 + (1.8 * float(factor))
 
     def _generate_session_timestamps(
         self,
@@ -2289,34 +2284,47 @@ class SessionPopulator:
         parameters: BehavioralParameters,
     ) -> List[int]:
         """
-        Generate timestamps for sessions using gamma-distributed intervals.
-
-        Source: Heitmayer & Lahlou (2021) - 290.5 sec mean interval
-        Gamma distribution captures the observed inter-check patterns.
+        Generate timestamps for sessions across the segment, with a bias toward
+        the persona's temporal peak hour rather than always front-loading at the
+        start of the segment.
         """
         if n_sessions <= 0:
             return []
 
-        # Convert interval from minutes to work within segment
-        mean_interval = parameters.mean_inter_session_interval_minutes
+        if end_minutes <= start_minutes:
+            end_minutes += 24 * 60
 
-        # Gamma parameters (shape=2 gives realistic right-skewed distribution)
-        shape = 2.0
-        scale = mean_interval / shape
+        segment_length = end_minutes - start_minutes
+        if segment_length <= 0:
+            return []
 
-        # Generate intervals
-        intervals = self.rng.gamma(shape, scale, size=n_sessions)
+        peak_hour = int(parameters.temporal_peak_hour)
 
-        # Convert to timestamps
-        timestamps = []
-        current_time = start_minutes + self.rng.uniform(0, mean_interval * 0.5)
+        candidate_times: List[int] = []
+        candidate_weights: List[float] = []
 
-        for interval in intervals:
-            if current_time >= end_minutes:
-                break
-            timestamps.append(int(current_time))
-            current_time += interval
+        # Build one candidate per minute across the segment
+        for minute in range(start_minutes, end_minutes):
+            hour_of_day = (minute // 60) % 24
 
+            # Stronger temporal weighting than before
+            distance = min(
+                abs(hour_of_day - peak_hour), 24 - abs(hour_of_day - peak_hour)
+            )
+            weight = float(np.exp(-(distance**2) / (2 * 2.5**2))) + 0.05
+
+            candidate_times.append(minute)
+            candidate_weights.append(weight)
+
+        weights = np.array(candidate_weights, dtype=float)
+        weights = weights / weights.sum()
+
+        sample_size = min(n_sessions, len(candidate_times))
+        chosen = self.rng.choice(
+            candidate_times, size=sample_size, replace=False, p=weights
+        )
+
+        timestamps = sorted(int(x) for x in chosen)
         return timestamps
 
     def _generate_single_session(
