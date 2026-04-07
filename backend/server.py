@@ -10,6 +10,7 @@ Endpoints:
     GET /health - Health check
 """
 
+import json
 import uuid
 import os
 from datetime import datetime, date
@@ -42,6 +43,8 @@ from models import (
     # Enums
     AgeRange,
     AreaType,
+    DashboardSectionSummary,
+    PersonaDashboardSummaryResponse,
     WakeTime,
     SleepTime,
     ChronotypeLabel,
@@ -263,6 +266,265 @@ def create_survey_summary(survey: ComprehensiveSurveyInput) -> Dict[str, Any]:
     }
 
 
+def _pick_schedule_from_persona(persona: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if persona.get("weekday_schedule"):
+        return persona["weekday_schedule"]
+    if persona.get("weekend_schedule"):
+        return persona["weekend_schedule"]
+    if persona.get("schedule"):
+        return persona["schedule"]
+    return None
+
+
+def _safe_mode(values: List[Any]) -> Optional[Any]:
+    if not values:
+        return None
+
+    counts: Dict[Any, int] = {}
+    for value in values:
+        counts[value] = counts.get(value, 0) + 1
+
+    best_value: Optional[Any] = None
+    best_count = -1
+
+    for value, count in counts.items():
+        if count > best_count:
+            best_value = value
+            best_count = count
+
+    return best_value
+
+
+def _dashboard_payload_from_persona(persona: Dict[str, Any]) -> Dict[str, Any]:
+    survey = persona.get("survey", {})
+    dimensions = persona.get("dimensions", {})
+    parameters = persona.get("parameters", {})
+    schedule = _pick_schedule_from_persona(persona) or {}
+
+    sessions = schedule.get("sessions", []) or []
+    segments = schedule.get("segments", []) or []
+
+    total_sessions = len(sessions)
+    total_screen_time_min = round(
+        sum(float(s.get("duration_seconds", 0) or 0) for s in sessions) / 60.0, 1
+    )
+    avg_session_duration = round(
+        (
+            sum(float(s.get("duration_seconds", 0) or 0) for s in sessions)
+            / max(total_sessions, 1)
+        ),
+        1,
+    )
+
+    glance_sessions = [s for s in sessions if bool(s.get("is_glance"))]
+    engaged_sessions = [s for s in sessions if not bool(s.get("is_glance"))]
+    glance_rate = round((len(glance_sessions) / max(total_sessions, 1)) * 100.0, 1)
+
+    user_initiated_sessions = [s for s in sessions if bool(s.get("is_user_initiated"))]
+    user_initiated_rate = round(
+        (len(user_initiated_sessions) / max(total_sessions, 1)) * 100.0, 1
+    )
+
+    hours = []
+    for s in sessions:
+        ts = s.get("timestamp")
+        if isinstance(ts, str) and "T" in ts:
+            try:
+                hour_str = ts.split("T", 1)[1][:2]
+                hours.append(int(hour_str))
+            except Exception:
+                pass
+    peak_hour = _safe_mode(hours)
+
+    app_categories = [s.get("app_category") for s in sessions if s.get("app_category")]
+    top_app = _safe_mode(app_categories)
+
+    location_time: Dict[str, float] = {}
+    context_time: Dict[str, float] = {}
+    app_time: Dict[str, float] = {}
+
+    for s in sessions:
+        duration = float(s.get("duration_seconds", 0) or 0)
+        location = str(s.get("location_label") or "unknown")
+        context = str(s.get("context") or "unknown")
+        app = str(s.get("app_category") or "unknown")
+
+        location_time[location] = location_time.get(location, 0.0) + duration
+        context_time[context] = context_time.get(context, 0.0) + duration
+        app_time[app] = app_time.get(app, 0.0) + duration
+
+    def top_n_minutes(d: Dict[str, float], n: int = 5) -> List[Dict[str, Any]]:
+        ordered = sorted(d.items(), key=lambda kv: kv[1], reverse=True)[:n]
+        return [{"name": k, "minutes": round(v / 60.0, 1)} for k, v in ordered]
+
+    longest_sessions = sorted(
+        sessions,
+        key=lambda s: float(s.get("duration_seconds", 0) or 0),
+        reverse=True,
+    )[:10]
+
+    return {
+        "persona_id": persona.get("persona_id"),
+        "survey_summary": {
+            "city": survey.get("city"),
+            "occupation": survey.get("occupation"),
+            "wake_time": survey.get("wake_time"),
+            "sleep_time": survey.get("sleep_time"),
+            "chronotype_self_report": survey.get("chronotype_self_report"),
+            "peak_usage_time": survey.get("peak_usage_time"),
+            "daily_screen_time": survey.get("daily_screen_time"),
+            "checking_frequency": survey.get("checking_frequency"),
+            "session_type": survey.get("session_type"),
+            "glance_frequency": survey.get("glance_frequency"),
+            "work_phone_restriction": survey.get("work_phone_restriction"),
+            "most_used_categories": survey.get("most_used_categories"),
+            "usage_reasons": survey.get("usage_reasons"),
+            "important_habit": survey.get("important_habit"),
+        },
+        "dimensions": dimensions,
+        "parameters": {
+            "waking_hour_start": parameters.get("waking_hour_start"),
+            "sleep_hour": parameters.get("sleep_hour"),
+            "temporal_peak_hour": parameters.get("temporal_peak_hour"),
+            "total_daily_minutes": parameters.get("total_daily_minutes"),
+            "sessions_per_day": parameters.get("sessions_per_day"),
+            "glance_probability": parameters.get("glance_probability"),
+        },
+        "overview_metrics": {
+            "total_sessions": total_sessions,
+            "total_screen_time_min": total_screen_time_min,
+            "avg_session_duration_sec": avg_session_duration,
+            "glance_rate_percent": glance_rate,
+            "user_initiated_rate_percent": user_initiated_rate,
+            "peak_hour": peak_hour,
+            "top_app": top_app,
+            "day_type": schedule.get("day_type"),
+        },
+        "segments": [
+            {
+                "start_time": seg.get("start_time"),
+                "end_time": seg.get("end_time"),
+                "activity": seg.get("activity"),
+                "context": seg.get("context"),
+                "location_label": seg.get("location_label"),
+            }
+            for seg in segments
+        ],
+        "top_apps_by_time": top_n_minutes(app_time, 6),
+        "top_contexts_by_time": top_n_minutes(context_time, 6),
+        "top_locations_by_time": top_n_minutes(location_time, 6),
+        "longest_sessions": [
+            {
+                "timestamp": s.get("timestamp"),
+                "app_category": s.get("app_category"),
+                "duration_seconds": round(float(s.get("duration_seconds", 0) or 0), 1),
+                "activity": s.get("activity"),
+                "context": s.get("context"),
+                "location_label": s.get("location_label"),
+            }
+            for s in longest_sessions
+        ],
+        "session_sample": [
+            {
+                "timestamp": s.get("timestamp"),
+                "duration_seconds": round(float(s.get("duration_seconds", 0) or 0), 1),
+                "is_glance": s.get("is_glance"),
+                "app_category": s.get("app_category"),
+                "is_user_initiated": s.get("is_user_initiated"),
+                "context": s.get("context"),
+                "activity": s.get("activity"),
+                "location_label": s.get("location_label"),
+            }
+            for s in sessions[:30]
+        ],
+    }
+
+
+def build_dashboard_summary_prompt(persona: Dict[str, Any]) -> str:
+    payload = _dashboard_payload_from_persona(persona)
+
+    return f"""
+You are writing study-facing summaries for a synthetic smartphone persona dashboard.
+
+The frontend has these tabs:
+1. Overview
+2. Dimensions
+3. Glances
+4. Sessions
+5. Apps
+6. Temporal
+7. Context
+8. Location
+
+Your task:
+Write one meaningful summary for each dashboard tab.
+Do NOT narrate each chart mechanically.
+Instead, summarize the main pattern that a participant would notice from that tab.
+
+Each tab summary should:
+- be 4-7 sentences
+- be readable aloud by a researcher
+- feel grounded in the data
+- include 3 discussion points the researcher can use in conversation
+- mention uncertainty or mismatch if something seems off
+
+IMPORTANT:
+- Do not invent facts
+- Do not over-interpret one synthetic day as a stable personality trait
+- Do not describe every chart separately
+- Summarize what the tab, as a whole, suggests
+- Use plain language
+
+Return ONLY valid JSON with this exact shape:
+{{
+  "overview": {{
+    "title": "string",
+    "summary": "string",
+    "discussion_points": ["string", "string", "string"]
+  }},
+  "dimensions": {{
+    "title": "string",
+    "summary": "string",
+    "discussion_points": ["string", "string", "string"]
+  }},
+  "glances": {{
+    "title": "string",
+    "summary": "string",
+    "discussion_points": ["string", "string", "string"]
+  }},
+  "sessions": {{
+    "title": "string",
+    "summary": "string",
+    "discussion_points": ["string", "string", "string"]
+  }},
+  "apps": {{
+    "title": "string",
+    "summary": "string",
+    "discussion_points": ["string", "string", "string"]
+  }},
+  "temporal": {{
+    "title": "string",
+    "summary": "string",
+    "discussion_points": ["string", "string", "string"]
+  }},
+  "context": {{
+    "title": "string",
+    "summary": "string",
+    "discussion_points": ["string", "string", "string"]
+  }},
+  "location": {{
+    "title": "string",
+    "summary": "string",
+    "discussion_points": ["string", "string", "string"]
+  }},
+  "overall_takeaway": "string"
+}}
+
+Persona dashboard data:
+{json.dumps(payload, indent=2, default=str)}
+""".strip()
+
+
 # ============================================================
 # ENDPOINTS
 # ============================================================
@@ -422,6 +684,66 @@ async def delete_all_personas_endpoint(_: bool = Depends(require_admin)):
     }
 
 
+@app.get(
+    "/persona/{persona_id}/dashboard-summary",
+    response_model=PersonaDashboardSummaryResponse,
+    tags=["Personas"],
+)
+async def summarize_persona_dashboards_endpoint(
+    persona_id: str,
+    _: bool = Depends(require_admin),
+):
+    """
+    Generate study-facing summaries aligned to the frontend dashboard tabs.
+    Protected by the admin API key.
+    """
+    persona = await get_persona(persona_id)
+    if not persona:
+        raise HTTPException(status_code=404, detail="Persona not found")
+
+    try:
+        llm = create_llm_client()
+        prompt = build_dashboard_summary_prompt(persona)
+        response = llm.invoke(prompt)
+
+        raw_text = (
+            response.content.strip()
+            if isinstance(response.content, str)
+            else str(response.content).strip()
+        )
+
+        data = json.loads(raw_text)
+
+        def parse_section(section_name: str) -> DashboardSectionSummary:
+            section = data.get(section_name, {}) or {}
+            return DashboardSectionSummary(
+                title=str(section.get("title", section_name.title())),
+                summary=str(section.get("summary", "")),
+                discussion_points=[
+                    str(x) for x in section.get("discussion_points", [])
+                ][:3],
+            )
+
+        return PersonaDashboardSummaryResponse(
+            persona_id=persona_id,
+            overview=parse_section("overview"),
+            dimensions=parse_section("dimensions"),
+            glances=parse_section("glances"),
+            sessions=parse_section("sessions"),
+            apps=parse_section("apps"),
+            temporal=parse_section("temporal"),
+            context=parse_section("context"),
+            location=parse_section("location"),
+            overall_takeaway=str(data.get("overall_takeaway", "")),
+            model="gpt-5.4-mini",
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate dashboard summary: {str(e)}",
+        )
+
+
 def create_llm_client() -> ChatOpenAI:
     """Create the chat model used for contextual day variation."""
     load_dotenv()
@@ -438,7 +760,7 @@ def create_llm_client() -> ChatOpenAI:
     # )
 
     return ChatOpenAI(
-        model="gpt-4.1-mini",
+        model="gpt-5.4-mini",
         temperature=0,
     )
 

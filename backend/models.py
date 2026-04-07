@@ -650,3 +650,27 @@ class GenerationResponse(BaseModel):
 
     # Execution results (if run)
     execution_metrics: Optional[Dict[str, Any]] = None
+
+
+class DashboardSectionSummary(BaseModel):
+    """Study-facing summary for one dashboard tab."""
+
+    title: str
+    summary: str
+    discussion_points: List[str]
+
+
+class PersonaDashboardSummaryResponse(BaseModel):
+    """LLM-generated summaries aligned to frontend dashboard tabs."""
+
+    persona_id: str
+    overview: DashboardSectionSummary
+    dimensions: DashboardSectionSummary
+    glances: DashboardSectionSummary
+    sessions: DashboardSectionSummary
+    apps: DashboardSectionSummary
+    temporal: DashboardSectionSummary
+    context: DashboardSectionSummary
+    location: DashboardSectionSummary
+    overall_takeaway: str
+    model: str
