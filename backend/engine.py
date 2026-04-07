@@ -1130,12 +1130,9 @@ class ParameterDeriver:
         self, survey: ComprehensiveSurveyInput
     ) -> Dict[AppCategory, float]:
         """
-        Derive app category weights from survey preferences.
-
-        Source: Survey Q24 (most used categories)
-        Formula: Weighted distribution based on ranking
+        Derive app category weights by triangulating multiple survey signals.
+        No ranking assumed - presence in a list = equal weight from that source.
         """
-        # Only include the 9 categories we actually use in BehavioralParameters
         USED_CATEGORIES = [
             AppCategory.SOCIAL_MEDIA,
             AppCategory.MESSAGING,
@@ -1148,39 +1145,54 @@ class ParameterDeriver:
             AppCategory.SHOPPING,
         ]
 
-        # Initialize base weights only for categories we use
-        weights = {cat: 0.05 for cat in USED_CATEGORIES}
+        # Base weights
+        weights = {cat: 0.02 for cat in USED_CATEGORIES}
 
-        # Assign higher weights to reported categories
-        for i, category in enumerate(survey.most_used_categories):
-            if category in weights:  # Only if it's a category we track
-                # First choice gets highest weight, decreasing by rank
-                rank_weight = 0.30 - (i * 0.05)  # 0.30, 0.25, 0.20, 0.15, 0.10...
-                rank_weight = max(rank_weight, 0.05)  # Floor at base weight
-                weights[category] = max(weights[category], rank_weight)
+        # Unified string-to-category mapping
+        str_to_category = {
+            # Category names
+            "social_media": AppCategory.SOCIAL_MEDIA,
+            "messaging": AppCategory.MESSAGING,
+            "video_streaming": AppCategory.VIDEO_STREAMING,
+            "music_audio": AppCategory.MUSIC_AUDIO,
+            "music_podcasts": AppCategory.MUSIC_AUDIO,
+            "maps_navigation": AppCategory.MAPS_NAVIGATION,
+            "productivity_work": AppCategory.PRODUCTIVITY_WORK,
+            "productivity": AppCategory.PRODUCTIVITY_WORK,
+            "news_reading": AppCategory.NEWS_READING,
+            "reading_news": AppCategory.NEWS_READING,
+            "games": AppCategory.GAMES,
+            "gaming": AppCategory.GAMES,
+            "shopping": AppCategory.SHOPPING,
+            # Usage reason variants
+            "watching_videos": AppCategory.VIDEO_STREAMING,
+            "messaging_talking": AppCategory.MESSAGING,
+        }
+
+        def add_weight(source_list, weight_per_item):
+            """Add weight for each category found in source list."""
+            for item in source_list:
+                # Handle both AppCategory enums and strings
+                if item in weights:
+                    weights[item] += weight_per_item
+                elif isinstance(item, str) and item in str_to_category:
+                    weights[str_to_category[item]] += weight_per_item
+
+        # --- Signal 1: most_used_categories (STRONG, equal weight) ---
+        add_weight(survey.most_used_categories, 0.15)
+
+        # --- Signal 2: usage_reasons (MEDIUM) ---
+        add_weight(survey.usage_reasons, 0.10)
+
+        # --- Signal 3: commute_activities (LOW) ---
+        add_weight(survey.commute_activities, 0.05)
+
+        # --- Signal 4: evening_activities_increase (LOW) ---
+        add_weight(survey.evening_activities_increase, 0.05)
 
         # Normalize to sum to 1.0
         total = sum(weights.values())
-        if total > 0:
-            weights = {k: v / total for k, v in weights.items()}
-        else:
-            # Fallback to equal weights
-            n = len(weights)
-            weights = {k: 1.0 / n for k, v in weights.items()}
-
-        # Force exact sum to 1.0 (fix floating point errors)
-        weights = self._force_weights_sum_to_one(weights)
-
-        self.citations.append(
-            LiteratureReference(
-                parameter="app_weights",
-                formula="Ranked from Q24, normalized to sum=1",
-                sources=["Survey Q24 - most used categories"],
-                notes="Top choices weighted 0.30, 0.25, 0.20, 0.15, 0.10",
-            )
-        )
-
-        return weights
+        return {k: v / total for k, v in weights.items()}
 
     def _force_weights_sum_to_one(
         self, weights: Dict[AppCategory, float]

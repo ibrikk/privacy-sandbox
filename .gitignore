@@ -8,3 +8,4 @@ __pycache__/
 .prettierrc
 .vscode/
 mcp-android-server-python/
+backend/personas.db
