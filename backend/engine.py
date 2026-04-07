@@ -2016,6 +2016,12 @@ class ScheduleGenerator:
         self, survey: ComprehensiveSurveyInput
     ) -> Tuple[float, float]:
         city = (survey.city or "").strip()
+        state_or_region = (getattr(survey, "state_or_region", None) or "").strip()
+        country = (getattr(survey, "country", None) or "").strip()
+        postal_code = (getattr(survey, "postal_code", None) or "").strip()
+
+        parts = [part for part in [city, state_or_region, postal_code, country] if part]
+        location_query = ", ".join(parts) if parts else city
 
         if city in self._city_coords_cache:
             return self._city_coords_cache[city]

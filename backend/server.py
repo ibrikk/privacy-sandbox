@@ -168,6 +168,9 @@ def parse_survey_from_frontend(data: Dict[str, Any]) -> ComprehensiveSurveyInput
         # Demographics
         "age_range": data.get("age_range", "25-34"),
         "city": data.get("city", "Unknown"),
+        "state_or_region": data.get("state_or_region"),
+        "country": data.get("country"),
+        "postal_code": data.get("postal_code"),
         "occupation": data.get("occupation", "Unknown"),
         "area_type": data.get("area_type", "urban"),
         # Sleep & Chronotype

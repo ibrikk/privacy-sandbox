@@ -2060,9 +2060,10 @@ def render_survey_form():
         )
         col1, col2 = st.columns(2)
         with col1:
-            city = st.text_input(
-                "City", value="San Francisco", help="Where does the persona live?"
-            )
+            city = st.text_input("City", value="San Francisco")
+            state_or_region = st.text_input("State / Region", value="California")
+            country = st.text_input("Country", value="USA")
+            postal_code = st.text_input("ZIP / Postal Code (optional)", value="")
             occupation = st.text_input("Occupation", value="Software Engineer")
         with col2:
             age_range = st.selectbox("Age Range", options=AGE_OPTIONS, index=1)
