@@ -786,27 +786,28 @@ class ParameterDeriver:
         self, survey: ComprehensiveSurveyInput, dimensions: BehavioralDimensions
     ) -> int:
         """
-        Derive peak usage hour.
+        Derive peak usage hour with stronger chronotype alignment.
 
-        Source: Survey Q8 with chronotype adjustment
-        Grounding: Evening types peak later (Randjelovic et al., 2021)
+        We still respect the survey's reported peak usage time, but evening
+        chronotypes are shifted later and morning chronotypes earlier.
         """
         base_peak = SurveyMappings.PEAK_USAGE_TO_HOUR[survey.peak_usage_time]
 
-        # Adjust by chronotype: evening types shift +1-2 hours
-        chronotype_shift = int(dimensions.chronotype_score * 2)
-        peak_hour = min(23, base_peak + chronotype_shift)
+        # Convert chronotype score [0,1] into a signed shift roughly [-3, +3]
+        signed_shift = round((dimensions.chronotype_score - 0.5) * 6)
+
+        peak_hour = (base_peak + signed_shift) % 24
 
         self.citations.append(
             LiteratureReference(
                 parameter="temporal_peak_hour",
-                formula=f"base_peak + chronotype_shift = {base_peak} + {chronotype_shift}",
+                formula=f"(base_peak + signed_shift) % 24 = ({base_peak} + {signed_shift}) % 24",
                 sources=["Randjelovic et al. (2021) - chronotype effects on timing"],
-                notes="Evening types show delayed peak usage",
+                notes="Chronotype has stronger influence on peak timing than before",
             )
         )
 
-        return peak_hour
+        return int(peak_hour)
 
     def _derive_late_night_probability(self, dimensions: BehavioralDimensions) -> float:
         """
@@ -1363,12 +1364,23 @@ class ScheduleGenerator:
     def _validate_segments(
         self, segments: List[ScheduleSegment]
     ) -> List[ScheduleSegment]:
-        """Ensure segments are sorted, contiguous, and non-overlapping."""
+        """Drop zero/negative-duration segments and sort."""
         if not segments:
             return segments
 
-        segments.sort(key=lambda s: (s.start_time.hour, s.start_time.minute))
-        return segments
+        valid_segments: List[ScheduleSegment] = []
+
+        for segment in segments:
+            start_minutes = segment.start_time.hour * 60 + segment.start_time.minute
+            end_minutes = segment.end_time.hour * 60 + segment.end_time.minute
+
+            if end_minutes <= start_minutes:
+                continue
+
+            valid_segments.append(segment)
+
+        valid_segments.sort(key=lambda s: (s.start_time.hour, s.start_time.minute))
+        return valid_segments
 
     def generate(
         self,
@@ -1411,9 +1423,10 @@ class ScheduleGenerator:
         context_modifiers: Optional[dict] = None,
     ) -> List[ScheduleSegment]:
         """Generate typical weekday schedule with proper commute handling."""
-        segments = []
+        segments: List[ScheduleSegment] = []
 
-        wake_hour = parameters.waking_hour_start
+        wake_hour = int(parameters.waking_hour_start)
+        sleep_hour = int(parameters.sleep_hour)
 
         is_commute_day = self._should_commute_today(
             survey, "weekday", context_modifiers
@@ -1422,6 +1435,7 @@ class ScheduleGenerator:
         commute_minutes = SurveyMappings.COMMUTE_TIME_TO_MINUTES[survey.commute_time]
         commute_context = self._get_commute_context(survey.commute_mode)
 
+        # Sleep from midnight until wake-up
         segments.append(
             ScheduleSegment(
                 start_time=time(0, 0),
@@ -1435,6 +1449,7 @@ class ScheduleGenerator:
             )
         )
 
+        # Morning routine
         morning_end = min(wake_hour + 1, 23)
         segments.append(
             ScheduleSegment(
@@ -1449,28 +1464,15 @@ class ScheduleGenerator:
             )
         )
 
-        if is_commute_day and commute_minutes > 10:
-            commute_start = morning_end
-            commute_duration_hours = commute_minutes / 60
-            commute_end = min(int(commute_start + commute_duration_hours) + 1, 12)
+        lunch_start = 12
+        lunch_end = 13
 
-            segments.append(
-                ScheduleSegment(
-                    start_time=time(commute_start, 0),
-                    end_time=time(commute_end, 0),
-                    activity=ActivityType.COMMUTING,
-                    context=commute_context,
-                    location_label="commute",
-                    phone_accessible=True,
-                    duration_multiplier=LiteratureConstants.CONTEXT_DURATION_MULTIPLIERS[
-                        commute_context
-                    ],
-                    frequency_multiplier=LiteratureConstants.CONTEXT_FREQUENCY_MULTIPLIERS[
-                        commute_context
-                    ],
-                )
-            )
-            work_start = commute_end
+        # Defaults for non-commute / work-from-home days
+        work_location = "home"
+        work_context = ContextType.WORK_FREE
+        work_start = morning_end
+
+        if is_commute_day and commute_minutes > 10:
             work_location = "work"
             work_context = (
                 ContextType.WORK_RESTRICTED
@@ -1478,16 +1480,44 @@ class ScheduleGenerator:
                 == WorkPhoneRestriction.BRIEFLY_WHEN_NECESSARY
                 else ContextType.WORK_FREE
             )
-        else:
-            work_start = morning_end
-            work_location = "home"
-            work_context = ContextType.WORK_FREE
 
-        if work_start < 12:
+            # Only create a morning commute if there is actual room before lunch
+            available_pre_lunch_minutes = max(0, (lunch_start - morning_end) * 60)
+
+            if available_pre_lunch_minutes >= 15:
+                actual_commute_minutes = min(
+                    commute_minutes, available_pre_lunch_minutes
+                )
+                commute_hours = max(1, math.ceil(actual_commute_minutes / 60))
+
+                commute_start = morning_end
+                commute_end = min(commute_start + commute_hours, lunch_start)
+
+                if commute_end > commute_start:
+                    segments.append(
+                        ScheduleSegment(
+                            start_time=time(commute_start, 0),
+                            end_time=time(commute_end, 0),
+                            activity=ActivityType.COMMUTING,
+                            context=commute_context,
+                            location_label="commute",
+                            phone_accessible=True,
+                            duration_multiplier=LiteratureConstants.CONTEXT_DURATION_MULTIPLIERS[
+                                commute_context
+                            ],
+                            frequency_multiplier=LiteratureConstants.CONTEXT_FREQUENCY_MULTIPLIERS[
+                                commute_context
+                            ],
+                        )
+                    )
+                    work_start = commute_end
+
+        # Pre-lunch work if there is room
+        if work_start < lunch_start:
             segments.append(
                 ScheduleSegment(
                     start_time=time(work_start, 0),
-                    end_time=time(12, 0),
+                    end_time=time(lunch_start, 0),
                     activity=ActivityType.WORKING,
                     context=work_context,
                     location_label=work_location,
@@ -1501,10 +1531,11 @@ class ScheduleGenerator:
                 )
             )
 
+        # Lunch
         segments.append(
             ScheduleSegment(
-                start_time=time(12, 0),
-                end_time=time(13, 0),
+                start_time=time(lunch_start, 0),
+                end_time=time(lunch_end, 0),
                 activity=ActivityType.LUNCH_BREAK,
                 context=(
                     ContextType.PUBLIC_PLACE
@@ -1518,6 +1549,7 @@ class ScheduleGenerator:
             )
         )
 
+        # Afternoon work
         segments.append(
             ScheduleSegment(
                 start_time=time(13, 0),
@@ -1535,34 +1567,41 @@ class ScheduleGenerator:
             )
         )
 
+        # Evening commute
         evening_start = 17
         if is_commute_day and commute_minutes > 10:
-            commute_home_end = min(17 + int(commute_minutes / 60) + 1, 20)
-            segments.append(
-                ScheduleSegment(
-                    start_time=time(17, 0),
-                    end_time=time(commute_home_end, 0),
-                    activity=ActivityType.COMMUTING,
-                    context=commute_context,
-                    location_label="commute",
-                    phone_accessible=True,
-                    duration_multiplier=LiteratureConstants.CONTEXT_DURATION_MULTIPLIERS[
-                        commute_context
-                    ],
-                    frequency_multiplier=LiteratureConstants.CONTEXT_FREQUENCY_MULTIPLIERS[
-                        commute_context
-                    ],
+            commute_home_end = min(17 + int(math.ceil(commute_minutes / 60.0)), 20)
+            if commute_home_end > 17:
+                segments.append(
+                    ScheduleSegment(
+                        start_time=time(17, 0),
+                        end_time=time(commute_home_end, 0),
+                        activity=ActivityType.COMMUTING,
+                        context=commute_context,
+                        location_label="commute",
+                        phone_accessible=True,
+                        duration_multiplier=LiteratureConstants.CONTEXT_DURATION_MULTIPLIERS[
+                            commute_context
+                        ],
+                        frequency_multiplier=LiteratureConstants.CONTEXT_FREQUENCY_MULTIPLIERS[
+                            commute_context
+                        ],
+                    )
                 )
-            )
-            evening_start = commute_home_end
+                evening_start = commute_home_end
 
-        wind_down_hour = max(evening_start + 1, min(parameters.sleep_hour - 1, 23))
+        # Handle sleep after midnight correctly
+        sleep_hour_same_day = sleep_hour if sleep_hour > wake_hour else 24
 
-        if evening_start < wind_down_hour:
+        # Reserve the last hour before sleep for winding down
+        wind_down_start = max(evening_start + 1, sleep_hour_same_day - 1)
+        wind_down_start = min(wind_down_start, 23)
+
+        if evening_start < wind_down_start:
             segments.append(
                 ScheduleSegment(
                     start_time=time(evening_start, 0),
-                    end_time=time(wind_down_hour, 0),
+                    end_time=time(wind_down_start, 0),
                     activity=ActivityType.HOME_EVENING,
                     context=ContextType.HOME_EVENING,
                     location_label="home",
@@ -1576,24 +1615,43 @@ class ScheduleGenerator:
                 )
             )
 
-        actual_sleep_hour = parameters.sleep_hour if parameters.sleep_hour < 24 else 23
-        if wind_down_hour < actual_sleep_hour:
-            segments.append(
-                ScheduleSegment(
-                    start_time=time(wind_down_hour, 0),
-                    end_time=time(actual_sleep_hour, 0),
-                    activity=ActivityType.WINDING_DOWN,
-                    context=ContextType.HOME_NIGHT,
-                    location_label="home",
-                    phone_accessible=True,
-                    duration_multiplier=LiteratureConstants.CONTEXT_DURATION_MULTIPLIERS[
-                        ContextType.HOME_NIGHT
-                    ],
-                    frequency_multiplier=LiteratureConstants.CONTEXT_FREQUENCY_MULTIPLIERS[
-                        ContextType.HOME_NIGHT
-                    ],
+        # Winding down until midnight if user sleeps after midnight
+        if sleep_hour <= wake_hour:
+            if wind_down_start < 23:
+                segments.append(
+                    ScheduleSegment(
+                        start_time=time(wind_down_start, 0),
+                        end_time=time(23, 59),
+                        activity=ActivityType.WINDING_DOWN,
+                        context=ContextType.HOME_NIGHT,
+                        location_label="home",
+                        phone_accessible=True,
+                        duration_multiplier=LiteratureConstants.CONTEXT_DURATION_MULTIPLIERS[
+                            ContextType.HOME_NIGHT
+                        ],
+                        frequency_multiplier=LiteratureConstants.CONTEXT_FREQUENCY_MULTIPLIERS[
+                            ContextType.HOME_NIGHT
+                        ],
+                    )
                 )
-            )
+        else:
+            if wind_down_start < sleep_hour:
+                segments.append(
+                    ScheduleSegment(
+                        start_time=time(wind_down_start, 0),
+                        end_time=time(sleep_hour, 0),
+                        activity=ActivityType.WINDING_DOWN,
+                        context=ContextType.HOME_NIGHT,
+                        location_label="home",
+                        phone_accessible=True,
+                        duration_multiplier=LiteratureConstants.CONTEXT_DURATION_MULTIPLIERS[
+                            ContextType.HOME_NIGHT
+                        ],
+                        frequency_multiplier=LiteratureConstants.CONTEXT_FREQUENCY_MULTIPLIERS[
+                            ContextType.HOME_NIGHT
+                        ],
+                    )
+                )
 
         return segments
 
@@ -2132,59 +2190,78 @@ class SessionPopulator:
         dimensions: BehavioralDimensions,
         date: str,
     ) -> List[PhoneSession]:
-        """Generate sessions within a single schedule segment."""
-        sessions = []
+        """
+        Populate a schedule segment with phone sessions.
 
-        # Calculate segment duration in minutes
+        Session count is based on:
+        - expected sessions/day
+        - segment duration
+        - context frequency multiplier
+        - activity suppression
+        - temporal peak alignment
+        """
+        sessions: List[PhoneSession] = []
+
+        if not segment.phone_accessible:
+            return sessions
+
         start_minutes = segment.start_time.hour * 60 + segment.start_time.minute
         end_minutes = segment.end_time.hour * 60 + segment.end_time.minute
-        if end_minutes <= start_minutes:
-            end_minutes += 24 * 60  # Handle overnight
-        segment_duration = end_minutes - start_minutes
+        segment_duration = max(0, end_minutes - start_minutes)
 
         if segment_duration <= 0:
             return sessions
 
-        # Calculate expected sessions for this segment
-        # Base rate from parameters, adjusted by segment multipliers
-        daily_rate = parameters.sessions_per_day
-        waking_hours = 16  # Approximate
-        hourly_rate = daily_rate / waking_hours
+        waking_hours = max(1.0, parameters.sleep_hour - parameters.waking_hour_start)
+        total_waking_minutes = waking_hours * 60.0
 
-        # Apply context multipliers
-        adjusted_rate = hourly_rate * segment.frequency_multiplier
+        # Base expected number of sessions in this segment
+        base_session_rate = float(parameters.sessions_per_day) / total_waking_minutes
+        adjusted_rate = base_session_rate * float(segment.frequency_multiplier)
 
-        # Expected sessions in this segment
-        expected_sessions = adjusted_rate * (segment_duration / 60)
-
-        # Apply temporal peak adjustment
-        peak_factor = self._calculate_peak_factor(
-            segment.start_time.hour, parameters.temporal_peak_hour
+        # Apply activity suppression if available
+        activity_suppression = LiteratureConstants.ACTIVITY_SUPPRESSION.get(
+            segment.activity, 1.0
         )
-        expected_sessions *= peak_factor
+        adjusted_rate *= float(activity_suppression)
 
-        # Sample actual number of sessions (Poisson)
-        n_sessions = self.rng.poisson(max(0.1, expected_sessions))
+        # Apply temporal peak weighting using the segment midpoint hour
+        midpoint_minutes = start_minutes + (segment_duration / 2.0)
+        midpoint_hour = int(midpoint_minutes // 60) % 24
+        peak_factor = self._calculate_peak_factor(
+            midpoint_hour,
+            int(parameters.temporal_peak_hour),
+        )
 
-        # Hard cap commute so it never floods the day with short checks.
-        # Rough rule: about 1 session per ~20 minutes, capped at 4 per block.
+        adjusted_rate *= float(peak_factor)
+
+        expected_sessions = adjusted_rate * float(segment_duration)
+
+        # Sample actual number of sessions
+        n_sessions = int(self.rng.poisson(max(0.05, expected_sessions)))
+
+        # Hard cap commute so it never floods the day with short checks
         if segment.activity == ActivityType.COMMUTING:
             commute_cap = max(1, min(4, int(round(segment_duration / 20))))
             n_sessions = min(n_sessions, commute_cap)
 
-        if n_sessions == 0:
+        if n_sessions <= 0:
             return sessions
 
-        # Generate session timestamps using gamma-distributed intervals
-        # Source: Heitmayer & Lahlou (2021) - inter-check intervals
         timestamps = self._generate_session_timestamps(
-            start_minutes, end_minutes, n_sessions, parameters
+            start_minutes,
+            end_minutes,
+            n_sessions,
+            parameters,
         )
 
-        # Generate each session
         for ts_minutes in timestamps:
             session = self._generate_single_session(
-                ts_minutes, date, segment, parameters, dimensions
+                ts_minutes,
+                date,
+                segment,
+                parameters,
+                dimensions,
             )
             sessions.append(session)
 
