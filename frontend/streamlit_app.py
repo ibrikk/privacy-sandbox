@@ -369,6 +369,17 @@ def get_sessions_df(schedule: dict) -> pd.DataFrame:
     return df
 
 
+def normalize_context_label(value) -> str:
+    """Collapse commute subtypes into a single display label."""
+    if value is None:
+        return "unknown"
+
+    text = str(value).strip().lower()
+    if text.startswith("commute_"):
+        return "commute"
+    return text
+
+
 # ============================================================
 # SIDEBAR
 # ============================================================
@@ -745,35 +756,81 @@ def render_app_heatmap_by_hour(df: pd.DataFrame) -> go.Figure:
 
 
 def render_context_distribution_pie(df: pd.DataFrame) -> go.Figure:
-    """Pie chart of sessions by context."""
-    if df.empty or "context" not in df.columns:
+    """Pie chart of total time by context."""
+    if df.empty or "context" not in df.columns or "duration_seconds" not in df.columns:
         return go.Figure()
 
-    context_counts = df["context"].value_counts()
-    labels = [str(c).replace("_", " ").title() for c in context_counts.index]
+    df_plot = df.copy()
+    df_plot["context_group"] = df_plot["context"].apply(normalize_context_label)
+
+    context_values = df_plot["context_group"].tolist()
+    duration_values_raw = df_plot["duration_seconds"].tolist()
+
+    duration_values: list[float] = []
+    for value in duration_values_raw:
+        try:
+            duration_values.append(float(value))
+        except (TypeError, ValueError):
+            duration_values.append(0.0)
+
+    context_base = pd.DataFrame(
+        {
+            "context_group": context_values,
+            "duration_seconds": duration_values,
+        }
+    )
+
+    context_minutes_df = (
+        context_base.groupby("context_group", dropna=False)
+        .agg(total_seconds=("duration_seconds", "sum"))
+        .reset_index()
+    )
+
+    context_minutes_df["total_minutes"] = [
+        float(v) / 60.0 for v in context_minutes_df["total_seconds"].tolist()
+    ]
+
+    context_minutes_df = context_minutes_df.sort_values(
+        by="total_seconds", ascending=False
+    )
+
+    labels = [
+        str(c).replace("_", " ").title()
+        for c in context_minutes_df["context_group"].tolist()
+    ]
 
     fig = go.Figure(
         data=[
             go.Pie(
                 labels=labels,
-                values=context_counts.values,
+                values=context_minutes_df["total_minutes"].tolist(),
                 hole=0.3,
                 marker=dict(colors=px.colors.qualitative.Pastel),
             )
         ]
     )
 
-    fig.update_layout(title="Sessions by Context", height=350)
+    fig.update_layout(title="Total Time by Context", height=350)
 
     return fig
 
 
 def render_activity_breakdown_bar(df: pd.DataFrame) -> go.Figure:
-    """Stacked bar of app usage by activity."""
-    if df.empty or "activity" not in df.columns or "app_category" not in df.columns:
+    """Stacked bar of app usage by activity using total minutes, not raw session count."""
+    if (
+        df.empty
+        or "activity" not in df.columns
+        or "app_category" not in df.columns
+        or "duration_seconds" not in df.columns
+    ):
         return go.Figure()
 
-    pivot = df.groupby(["activity", "app_category"]).size().unstack(fill_value=0)
+    pivot = (
+        df.groupby(["activity", "app_category"])["duration_seconds"]
+        .sum()
+        .unstack(fill_value=0)
+        / 60.0
+    )
 
     fig = go.Figure()
     activity_labels = [str(a).replace("_", " ").title() for a in pivot.index]
@@ -790,7 +847,7 @@ def render_activity_breakdown_bar(df: pd.DataFrame) -> go.Figure:
     fig.update_layout(
         title="App Usage by Activity",
         xaxis_title="Activity",
-        yaxis_title="Session Count",
+        yaxis_title="Total Time (min)",
         barmode="stack",
         height=400,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
@@ -996,7 +1053,7 @@ def render_location_map(df: pd.DataFrame) -> go.Figure:
             lon=loc_agg["longitude"],
             mode="markers",
             marker=dict(
-                size=loc_agg["session_count"] * 3 + 10,
+                size=np.sqrt(loc_agg["session_count"]) * 8 + 6,
                 color=loc_agg["session_count"],
                 colorscale="Viridis",
                 showscale=True,
@@ -1593,19 +1650,15 @@ def render_apps_tab(df: pd.DataFrame):
                 fig, use_container_width=True, key="apps_glance_rate_by_app"
             )
 
+    # Full-width heatmap
+    st.markdown(
+        '<p class="section-header">🗓️ Hourly App Usage Heatmap</p>',
+        unsafe_allow_html=True,
+    )
+
     fig = render_app_heatmap_by_hour(df)
     if fig:
-        st.plotly_chart(fig, use_container_width=True, key="apps_heatmap_by_hour")
-
-        # Full-width heatmap
-        st.markdown(
-            '<p class="section-header">🗓️ Hourly App Usage Heatmap</p>',
-            unsafe_allow_html=True,
-        )
-
-        fig = render_app_heatmap_by_hour(df)
-        if fig:
-            st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True)
 
 
 def render_temporal_tab(df: pd.DataFrame, schedule: dict):
@@ -1659,7 +1712,9 @@ def render_temporal_tab(df: pd.DataFrame, schedule: dict):
                     {
                         "Time": f"{seg.get('start_time', '')} - {seg.get('end_time', '')}",
                         "Activity": seg.get("activity", "").replace("_", " ").title(),
-                        "Context": seg.get("context", "").replace("_", " ").title(),
+                        "Context": normalize_context_label(seg.get("context", ""))
+                        .replace("_", " ")
+                        .title(),
                         "Location": seg.get("location_label", "")
                         .replace("_", " ")
                         .title(),
@@ -1685,77 +1740,177 @@ def render_context_tab(df: pd.DataFrame):
         fig = render_context_distribution_pie(df)
         if fig:
             st.plotly_chart(
-                fig, use_container_width=True, key="context_distribution_pie"
+                fig,
+                use_container_width=True,
+                key="context_distribution_pie",
             )
 
-        if "activity" in df.columns:
-            activity_counts = df["activity"].value_counts()
+        if "activity" in df.columns and "duration_seconds" in df.columns:
+            activity_raw_values = df["activity"].tolist()
+            activity_duration_raw_values = df["duration_seconds"].tolist()
+
+            activity_duration_values: list[float] = []
+            for value in activity_duration_raw_values:
+                try:
+                    activity_duration_values.append(float(value))
+                except (TypeError, ValueError):
+                    activity_duration_values.append(0.0)
+
+            activity_base_df = pd.DataFrame(
+                {
+                    "activity": activity_raw_values,
+                    "duration_seconds": activity_duration_values,
+                }
+            )
+
+            activity_totals_df = (
+                activity_base_df.groupby("activity", dropna=False)
+                .agg(total_seconds=("duration_seconds", "sum"))
+                .reset_index()
+            )
+
+            activity_total_seconds = activity_totals_df["total_seconds"].tolist()
+            activity_total_minutes = [float(v) / 60.0 for v in activity_total_seconds]
+            activity_totals_df["total_minutes"] = activity_total_minutes
+
+            activity_totals_df = activity_totals_df.sort_values(
+                by="total_seconds",
+                ascending=True,
+            )
+
             activity_labels = [
-                str(a).replace("_", " ").title() for a in activity_counts.index
+                str(value).replace("_", " ").title()
+                for value in activity_totals_df["activity"].tolist()
             ]
 
             fig = go.Figure(
                 go.Bar(
-                    x=activity_counts.values,
+                    x=activity_totals_df["total_minutes"].tolist(),
                     y=activity_labels,
                     orientation="h",
                     marker_color=px.colors.qualitative.Pastel,
+                    text=[
+                        f"{float(v):.1f} min"
+                        for v in activity_totals_df["total_minutes"].tolist()
+                    ],
+                    textposition="outside",
                 )
             )
+
             fig.update_layout(
-                title="Sessions by Activity",
-                xaxis_title="Session Count",
+                title="Total Time by Activity",
+                xaxis_title="Time (min)",
                 height=350,
                 margin=dict(l=150),
             )
+
             st.plotly_chart(
-                fig, use_container_width=True, key="context_sessions_by_activity"
+                fig,
+                use_container_width=True,
+                key="context_activity_time_bar",
             )
 
     with col2:
         fig = render_activity_breakdown_bar(df)
         if fig:
             st.plotly_chart(
-                fig, use_container_width=True, key="context_activity_breakdown"
+                fig,
+                use_container_width=True,
+                key="context_activity_breakdown",
             )
 
         fig = render_user_initiated_pie(df)
         if fig:
             st.plotly_chart(
-                fig, use_container_width=True, key="context_user_initiated_pie"
+                fig,
+                use_container_width=True,
+                key="context_user_initiated_pie",
             )
 
-    # Context-specific metrics
     st.markdown(
-        '<p class="section-header">📊 Usage by Context</p>', unsafe_allow_html=True
+        '<p class="section-header">📊 Usage by Context</p>',
+        unsafe_allow_html=True,
     )
 
-    if "context" in df.columns:
-        context_stats = (
-            df.groupby("context")
-            .agg({"duration_seconds": ["count", "mean", "sum"], "is_glance": "mean"})
-            .round(2)
+    if "context" in df.columns and "duration_seconds" in df.columns:
+        context_df = df.copy()
+        context_df["context_group"] = context_df["context"].apply(
+            normalize_context_label
         )
-        context_stats.columns = [
-            "Sessions",
-            "Avg Duration (s)",
-            "Total Time (s)",
-            "Glance Rate",
-        ]
-        context_stats["Total Time (min)"] = (
-            context_stats["Total Time (s)"] / 60
-        ).round(1)
-        context_stats["Glance Rate"] = (context_stats["Glance Rate"] * 100).round(
-            1
-        ).astype(str) + "%"
-        context_stats.index = context_stats.index.str.replace("_", " ").str.title()
 
-        st.dataframe(
-            context_stats[
-                ["Sessions", "Avg Duration (s)", "Total Time (min)", "Glance Rate"]
-            ],
-            use_container_width=True,
+        context_group_raw_values = context_df["context_group"].tolist()
+        context_duration_raw_values = context_df["duration_seconds"].tolist()
+
+        context_duration_values: list[float] = []
+        for value in context_duration_raw_values:
+            try:
+                context_duration_values.append(float(value))
+            except (TypeError, ValueError):
+                context_duration_values.append(0.0)
+
+        if "is_glance" in context_df.columns:
+            context_glance_raw_values = context_df["is_glance"].tolist()
+        else:
+            context_glance_raw_values = [False] * len(context_group_raw_values)
+
+        context_glance_values: list[float] = []
+        for value in context_glance_raw_values:
+            context_glance_values.append(1.0 if bool(value) else 0.0)
+
+        context_base_df = pd.DataFrame(
+            {
+                "context_group": context_group_raw_values,
+                "duration_seconds": context_duration_values,
+                "is_glance": context_glance_values,
+            }
         )
+
+        context_stats_df = (
+            context_base_df.groupby("context_group", dropna=False)
+            .agg(
+                Sessions=("duration_seconds", "count"),
+                Avg_Duration_s=("duration_seconds", "mean"),
+                Total_Time_s=("duration_seconds", "sum"),
+                Glance_Rate=("is_glance", "mean"),
+            )
+            .reset_index()
+        )
+
+        context_stats_df["Total_Time_min"] = [
+            float(v) / 60.0 for v in context_stats_df["Total_Time_s"].tolist()
+        ]
+
+        context_stats_df["Glance_Rate_Display"] = [
+            f"{float(v) * 100:.1f}%" for v in context_stats_df["Glance_Rate"].tolist()
+        ]
+
+        context_stats_df = context_stats_df.sort_values(
+            by="Total_Time_s",
+            ascending=False,
+        )
+
+        context_labels = [
+            str(value).replace("_", " ").title()
+            for value in context_stats_df["context_group"].tolist()
+        ]
+
+        display_df = pd.DataFrame(
+            {
+                "Context": context_labels,
+                "Sessions": context_stats_df["Sessions"].tolist(),
+                "Avg Duration (s)": [
+                    round(float(v), 2)
+                    for v in context_stats_df["Avg_Duration_s"].tolist()
+                ],
+                "Total Time (min)": [
+                    round(float(v), 1)
+                    for v in context_stats_df["Total_Time_min"].tolist()
+                ],
+                "Glance Rate": context_stats_df["Glance_Rate_Display"].tolist(),
+            }
+        )
+
+        st.dataframe(display_df, use_container_width=True)
 
 
 def render_location_tab(df: pd.DataFrame) -> None:

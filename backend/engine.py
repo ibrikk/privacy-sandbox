@@ -137,33 +137,33 @@ class LiteratureConstants:
     # DURATION varies by context (Heitmayer & Lahlou 2021)
     # Work: β=-36.02; Home: β=+42.53
     CONTEXT_DURATION_MULTIPLIERS = {
-        ContextType.WORK_RESTRICTED: 0.60,  # Shorter sessions at restricted work
-        ContextType.WORK_FREE: 0.85,  # Still somewhat shorter than home
-        ContextType.HOME_MORNING: 1.00,  # Baseline
-        ContextType.HOME_EVENING: 1.25,  # β=+42, evening stickiness
-        ContextType.HOME_NIGHT: 1.40,  # Even longer late night sessions
-        ContextType.COMMUTE_TRANSIT: 0.90,  # Moderate - can engage but interrupted
-        ContextType.COMMUTE_DRIVING: 0.10,  # Safety - almost no engagement
-        ContextType.COMMUTE_WALKING: 0.25,  # Very short glances only
-        ContextType.PUBLIC_PLACE: 0.95,  # Slightly shorter
-        ContextType.EXERCISING: 0.05,  # Almost nothing
-        ContextType.SOCIAL_SETTING: 0.70,  # Social presence shortens
+        ContextType.WORK_RESTRICTED: 0.60,
+        ContextType.WORK_FREE: 0.85,
+        ContextType.HOME_MORNING: 1.00,
+        ContextType.HOME_EVENING: 1.25,
+        ContextType.HOME_NIGHT: 1.40,
+        # Treat all commute contexts as one light/generic commute behavior
+        ContextType.COMMUTE_TRANSIT: 0.55,
+        ContextType.COMMUTE_DRIVING: 0.55,
+        ContextType.COMMUTE_WALKING: 0.55,
+        ContextType.PUBLIC_PLACE: 0.95,
+        ContextType.EXERCISING: 0.05,
+        ContextType.SOCIAL_SETTING: 0.70,
     }
 
-    # FREQUENCY is relatively INVARIANT (Heitmayer & Lahlou 2021)
-    # Exception: Physical constraints (driving, exercising) suppress completely
     CONTEXT_FREQUENCY_MULTIPLIERS = {
-        ContextType.WORK_RESTRICTED: 0.85,  # Slight reduction, not dramatic
-        ContextType.WORK_FREE: 0.95,  # Nearly baseline
-        ContextType.HOME_MORNING: 1.00,  # Baseline
-        ContextType.HOME_EVENING: 1.05,  # Slight increase
-        ContextType.HOME_NIGHT: 0.80,  # Less frequent but longer
-        ContextType.COMMUTE_TRANSIT: 1.00,  # SAME frequency, different duration
-        ContextType.COMMUTE_DRIVING: 0.05,  # Safety constraint
-        ContextType.COMMUTE_WALKING: 0.15,  # Physical constraint (only ~6% of use while walking)
-        ContextType.PUBLIC_PLACE: 1.00,  # Invariant
-        ContextType.EXERCISING: 0.02,  # Literature: 2% while exercising
-        ContextType.SOCIAL_SETTING: 0.85,  # Social inhibition
+        ContextType.WORK_RESTRICTED: 0.85,
+        ContextType.WORK_FREE: 0.95,
+        ContextType.HOME_MORNING: 1.00,
+        ContextType.HOME_EVENING: 1.05,
+        ContextType.HOME_NIGHT: 0.80,
+        # Much lower checking during commute so it stops dominating charts
+        ContextType.COMMUTE_TRANSIT: 0.18,
+        ContextType.COMMUTE_DRIVING: 0.18,
+        ContextType.COMMUTE_WALKING: 0.18,
+        ContextType.PUBLIC_PLACE: 1.00,
+        ContextType.EXERCISING: 0.02,
+        ContextType.SOCIAL_SETTING: 0.85,
     }
 
     # -------------------------------------------------------------------------
@@ -1353,10 +1353,10 @@ class ScheduleGenerator:
 
         commute_probability = {
             CommuteDays.ZERO: 0.0,
-            CommuteDays.ONE_TWO: 0.30,
-            CommuteDays.THREE_FOUR: 0.70,
-            CommuteDays.FIVE_PLUS: 0.95,
-        }.get(survey.commute_days, 0.70)
+            CommuteDays.ONE_TWO: 0.20,
+            CommuteDays.THREE_FOUR: 0.55,
+            CommuteDays.FIVE_PLUS: 0.80,
+        }.get(survey.commute_days, 0.55)
 
         return self.rng.random() < commute_probability
 
@@ -1461,7 +1461,7 @@ class ScheduleGenerator:
                     activity=ActivityType.COMMUTING,
                     context=commute_context,
                     location_label="commute",
-                    phone_accessible=(commute_context != ContextType.COMMUTE_DRIVING),
+                    phone_accessible=True,
                     duration_multiplier=LiteratureConstants.CONTEXT_DURATION_MULTIPLIERS[
                         commute_context
                     ],
@@ -1545,7 +1545,7 @@ class ScheduleGenerator:
                     activity=ActivityType.COMMUTING,
                     context=commute_context,
                     location_label="commute",
-                    phone_accessible=(commute_context != ContextType.COMMUTE_DRIVING),
+                    phone_accessible=True,
                     duration_multiplier=LiteratureConstants.CONTEXT_DURATION_MULTIPLIERS[
                         commute_context
                     ],
@@ -1777,16 +1777,12 @@ class ScheduleGenerator:
         return segments
 
     def _get_commute_context(self, commute_mode: CommuteMode) -> ContextType:
-        """Map commute mode to context type."""
-        mode_to_context = {
-            CommuteMode.DRIVING: ContextType.COMMUTE_DRIVING,
-            CommuteMode.PUBLIC_TRANSIT: ContextType.COMMUTE_TRANSIT,
-            CommuteMode.WALKING_BIKING: ContextType.COMMUTE_WALKING,
-            CommuteMode.MIXED: ContextType.COMMUTE_TRANSIT,
-            CommuteMode.STAY_HOME: ContextType.HOME_MORNING,
-            CommuteMode.WORK_FROM_HOME: ContextType.HOME_MORNING,
-        }
-        return mode_to_context.get(commute_mode, ContextType.COMMUTE_TRANSIT)
+        """
+        Treat all commuting as a single generic context for now.
+        We intentionally ignore commute_mode in behavioral modeling.
+        """
+        _ = commute_mode
+        return ContextType.COMMUTE_TRANSIT
 
     def _assign_locations(
         self, segments: List[ScheduleSegment], survey: ComprehensiveSurveyInput
@@ -1991,6 +1987,12 @@ class SessionPopulator:
         # Sample actual number of sessions (Poisson)
         n_sessions = self.rng.poisson(max(0.1, expected_sessions))
 
+        # Hard cap commute so it never floods the day with short checks.
+        # Rough rule: about 1 session per ~20 minutes, capped at 4 per block.
+        if segment.activity == ActivityType.COMMUTING:
+            commute_cap = max(1, min(4, int(round(segment_duration / 20))))
+            n_sessions = min(n_sessions, commute_cap)
+
         if n_sessions == 0:
             return sessions
 
@@ -2115,7 +2117,12 @@ class SessionPopulator:
             duration = max(15, min(duration, 1800))  # 15 sec to 30 min
 
         # Select app category based on weights
-        app_category = self._select_app_category(parameters, dimensions, is_glance)
+        app_category = self._select_app_category(
+            parameters,
+            dimensions,
+            segment,
+            is_glance,
+        )
 
         # Convert timestamp to datetime
         hours = ts_minutes // 60
@@ -2153,15 +2160,15 @@ class SessionPopulator:
         self,
         parameters: BehavioralParameters,
         dimensions: BehavioralDimensions,
+        segment: ScheduleSegment,
         is_glance: bool,
     ) -> AppCategory:
         """
-        Select app category based on weights and session type.
-
-        Glances tend toward quick-check apps (messaging, social).
-        Engaged sessions more varied based on user preferences.
+        Select app category based on persona weights plus light activity-aware rules.
         """
-        # Build weight dictionary
+
+        _ = dimensions  # reserved for future tuning
+
         weights = {
             AppCategory.SOCIAL_MEDIA: parameters.weight_social,
             AppCategory.MESSAGING: parameters.weight_messaging,
@@ -2174,19 +2181,62 @@ class SessionPopulator:
             AppCategory.SHOPPING: parameters.weight_shopping,
         }
 
-        # Adjust weights for glances
-        # Source: Glances tend toward notification-heavy apps
+        # Light context/activity rules
+        if segment.activity == ActivityType.COMMUTING:
+            weights[AppCategory.MUSIC_AUDIO] *= 3.0
+            weights[AppCategory.MAPS_NAVIGATION] *= 2.2
+            weights[AppCategory.MESSAGING] *= 1.4
+            weights[AppCategory.PRODUCTIVITY_WORK] *= 0.5
+            weights[AppCategory.VIDEO_STREAMING] *= 0.15
+            weights[AppCategory.GAMES] *= 0.20
+            weights[AppCategory.SHOPPING] *= 0.30
+
+        elif segment.activity == ActivityType.WORKING:
+            weights[AppCategory.PRODUCTIVITY_WORK] *= 2.5
+            weights[AppCategory.MESSAGING] *= 1.2
+            weights[AppCategory.NEWS_READING] *= 1.1
+            weights[AppCategory.VIDEO_STREAMING] *= 0.25
+            weights[AppCategory.GAMES] *= 0.15
+            weights[AppCategory.SHOPPING] *= 0.30
+
+        elif segment.activity == ActivityType.LUNCH_BREAK:
+            weights[AppCategory.MESSAGING] *= 1.5
+            weights[AppCategory.SOCIAL_MEDIA] *= 1.3
+            weights[AppCategory.NEWS_READING] *= 1.2
+            weights[AppCategory.PRODUCTIVITY_WORK] *= 0.8
+
+        elif segment.activity == ActivityType.ERRANDS:
+            weights[AppCategory.MAPS_NAVIGATION] *= 1.8
+            weights[AppCategory.SHOPPING] *= 2.0
+            weights[AppCategory.MESSAGING] *= 1.1
+            weights[AppCategory.GAMES] *= 0.35
+            weights[AppCategory.VIDEO_STREAMING] *= 0.35
+
+        elif segment.activity in {
+            ActivityType.HOME_EVENING,
+            ActivityType.LEISURE,
+            ActivityType.WINDING_DOWN,
+        }:
+            weights[AppCategory.VIDEO_STREAMING] *= 1.8
+            weights[AppCategory.SOCIAL_MEDIA] *= 1.5
+            weights[AppCategory.GAMES] *= 1.4
+            weights[AppCategory.MUSIC_AUDIO] *= 1.2
+            weights[AppCategory.PRODUCTIVITY_WORK] *= 0.5
+
+        # Glances still bias toward quick-check apps
         if is_glance:
             weights[AppCategory.MESSAGING] *= 2.0
             weights[AppCategory.SOCIAL_MEDIA] *= 1.5
+            weights[AppCategory.NEWS_READING] *= 1.15
             weights[AppCategory.VIDEO_STREAMING] *= 0.3
             weights[AppCategory.GAMES] *= 0.2
 
-        # Normalize
-        total = sum(weights.values())
-        probs = [w / total for w in weights.values()]
-
+        # Normalize safely
         categories = list(weights.keys())
+        safe_weights = [max(weights[c], 0.001) for c in categories]
+        total = sum(safe_weights)
+        probs = [w / total for w in safe_weights]
+
         idx = self.rng.choice(len(categories), p=probs)
         return categories[idx]
 
