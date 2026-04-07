@@ -416,9 +416,9 @@ def render_sidebar():
 
     col1, col2 = st.sidebar.columns(2)
     with col1:
-        load_clicked = st.button("Load", use_container_width=True, key="load_btn")
+        load_clicked = st.button("Load", width="stretch", key="load_btn")
     with col2:
-        clear_clicked = st.button("Clear", use_container_width=True, key="clear_btn")
+        clear_clicked = st.button("Clear", width="stretch", key="clear_btn")
 
     if load_clicked and persona_id_input:
         with st.sidebar.status("Loading...", expanded=True):
@@ -449,7 +449,7 @@ def render_sidebar():
     st.sidebar.subheader("🧭 Navigation")
 
     if st.sidebar.button(
-        "📝 New Survey", use_container_width=True, type="secondary", key="nav_survey"
+        "📝 New Survey", width="stretch", type="secondary", key="nav_survey"
     ):
         st.session_state.view_mode = "survey"
         st.session_state.generation_result = None
@@ -459,7 +459,7 @@ def render_sidebar():
     if st.session_state.generation_result:
         if st.sidebar.button(
             "📊 View Results",
-            use_container_width=True,
+            width="stretch",
             type="primary",
             key="nav_results",
         ):
@@ -1465,26 +1465,20 @@ def render_overview_tab(
     with col_left:
         fig = render_sessions_by_hour_line(df)
         if fig:
-            st.plotly_chart(
-                fig, use_container_width=True, key="overview_sessions_by_hour"
-            )
+            st.plotly_chart(fig, width="stretch", key="overview_sessions_by_hour")
 
         fig = render_glance_vs_engaged_pie(df)
         if fig:
-            st.plotly_chart(fig, use_container_width=True, key="overview_glance_pie")
+            st.plotly_chart(fig, width="stretch", key="overview_glance_pie")
 
     with col_right:
         fig = render_app_category_sessions_bar(df)
         if fig:
-            st.plotly_chart(
-                fig, use_container_width=True, key="overview_app_category_bar"
-            )
+            st.plotly_chart(fig, width="stretch", key="overview_app_category_bar")
 
         fig = render_user_initiated_pie(df)
         if fig:
-            st.plotly_chart(
-                fig, use_container_width=True, key="overview_user_initiated_pie"
-            )
+            st.plotly_chart(fig, width="stretch", key="overview_user_initiated_pie")
 
     # Persona info
     st.markdown(
@@ -1521,22 +1515,20 @@ def render_glances_tab(df: pd.DataFrame):
     with col1:
         fig = render_glance_vs_engaged_pie(df)
         if fig:
-            st.plotly_chart(fig, use_container_width=True, key="glances_glance_pie")
+            st.plotly_chart(fig, width="stretch", key="glances_glance_pie")
 
         fig = render_glance_timeline(df)
         if fig:
-            st.plotly_chart(fig, use_container_width=True, key="glances_timeline")
+            st.plotly_chart(fig, width="stretch", key="glances_timeline")
 
     with col2:
         fig = render_glance_duration_comparison(df)
         if fig:
-            st.plotly_chart(
-                fig, use_container_width=True, key="glances_duration_comparison"
-            )
+            st.plotly_chart(fig, width="stretch", key="glances_duration_comparison")
 
         fig = render_glance_rate_by_app(df)
         if fig:
-            st.plotly_chart(fig, use_container_width=True, key="glances_rate_by_app")
+            st.plotly_chart(fig, width="stretch", key="glances_rate_by_app")
 
     # Glance statistics
     st.markdown(
@@ -1578,26 +1570,20 @@ def render_sessions_tab(df: pd.DataFrame):
     with col1:
         fig = render_session_duration_histogram(df)
         if fig:
-            st.plotly_chart(
-                fig, use_container_width=True, key="sessions_duration_histogram"
-            )
+            st.plotly_chart(fig, width="stretch", key="sessions_duration_histogram")
 
         fig = render_time_between_sessions(df)
         if fig:
-            st.plotly_chart(fig, use_container_width=True, key="sessions_time_between")
+            st.plotly_chart(fig, width="stretch", key="sessions_time_between")
 
     with col2:
         fig = render_duration_by_app_box(df)
         if fig:
-            st.plotly_chart(
-                fig, use_container_width=True, key="sessions_duration_by_app_box"
-            )
+            st.plotly_chart(fig, width="stretch", key="sessions_duration_by_app_box")
 
         fig = render_session_burst_analysis(df)
         if fig:
-            st.plotly_chart(
-                fig, use_container_width=True, key="sessions_burst_analysis"
-            )
+            st.plotly_chart(fig, width="stretch", key="sessions_burst_analysis")
 
     # Top sessions table
     st.markdown(
@@ -1608,7 +1594,7 @@ def render_sessions_tab(df: pd.DataFrame):
     if not top_sessions.empty:
         st.dataframe(
             top_sessions,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={
                 "timestamp": "Time",
@@ -1633,24 +1619,20 @@ def render_apps_tab(df: pd.DataFrame):
     with col1:
         fig = render_app_category_sessions_bar(df)
         if fig:
-            st.plotly_chart(fig, use_container_width=True, key="apps_app_category_bar")
+            st.plotly_chart(fig, width="stretch", key="apps_app_category_bar")
 
         fig = render_user_initiated_by_app(df)
         if fig:
-            st.plotly_chart(
-                fig, use_container_width=True, key="apps_user_initiated_by_app"
-            )
+            st.plotly_chart(fig, width="stretch", key="apps_user_initiated_by_app")
 
     with col2:
         fig = render_app_total_time_bar(df)
         if fig:
-            st.plotly_chart(fig, use_container_width=True, key="apps_total_time_bar")
+            st.plotly_chart(fig, width="stretch", key="apps_total_time_bar")
 
         fig = render_glance_rate_by_app(df)
         if fig:
-            st.plotly_chart(
-                fig, use_container_width=True, key="apps_glance_rate_by_app"
-            )
+            st.plotly_chart(fig, width="stretch", key="apps_glance_rate_by_app")
 
     # Full-width heatmap
     st.markdown(
@@ -1660,7 +1642,7 @@ def render_apps_tab(df: pd.DataFrame):
 
     fig = render_app_heatmap_by_hour(df)
     if fig:
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 
 def render_temporal_tab(df: pd.DataFrame, schedule: dict):
@@ -1676,28 +1658,22 @@ def render_temporal_tab(df: pd.DataFrame, schedule: dict):
     with col1:
         fig = render_sessions_by_hour_line(df)
         if fig:
-            st.plotly_chart(
-                fig, use_container_width=True, key="temporal_sessions_by_hour"
-            )
+            st.plotly_chart(fig, width="stretch", key="temporal_sessions_by_hour")
 
         fig = render_glance_timeline(df)
         if fig:
-            st.plotly_chart(
-                fig, use_container_width=True, key="temporal_glance_timeline"
-            )
+            st.plotly_chart(fig, width="stretch", key="temporal_glance_timeline")
 
     with col2:
         fig = render_activity_time_distribution(df)
         if fig:
             st.plotly_chart(
-                fig, use_container_width=True, key="temporal_activity_time_distribution"
+                fig, width="stretch", key="temporal_activity_time_distribution"
             )
 
         fig = render_time_between_sessions(df)
         if fig:
-            st.plotly_chart(
-                fig, use_container_width=True, key="temporal_time_between_sessions"
-            )
+            st.plotly_chart(fig, width="stretch", key="temporal_time_between_sessions")
 
     # Schedule segments visualization
     if schedule and "segments" in schedule:
@@ -1723,9 +1699,7 @@ def render_temporal_tab(df: pd.DataFrame, schedule: dict):
                     }
                 )
 
-            st.dataframe(
-                pd.DataFrame(segment_data), use_container_width=True, hide_index=True
-            )
+            st.dataframe(pd.DataFrame(segment_data), width="stretch", hide_index=True)
 
 
 def render_context_tab(df: pd.DataFrame):
@@ -1743,7 +1717,7 @@ def render_context_tab(df: pd.DataFrame):
         if fig:
             st.plotly_chart(
                 fig,
-                use_container_width=True,
+                width="stretch",
                 key="context_distribution_pie",
             )
 
@@ -1808,7 +1782,7 @@ def render_context_tab(df: pd.DataFrame):
 
             st.plotly_chart(
                 fig,
-                use_container_width=True,
+                width="stretch",
                 key="context_activity_time_bar",
             )
 
@@ -1817,7 +1791,7 @@ def render_context_tab(df: pd.DataFrame):
         if fig:
             st.plotly_chart(
                 fig,
-                use_container_width=True,
+                width="stretch",
                 key="context_activity_breakdown",
             )
 
@@ -1825,7 +1799,7 @@ def render_context_tab(df: pd.DataFrame):
         if fig:
             st.plotly_chart(
                 fig,
-                use_container_width=True,
+                width="stretch",
                 key="context_user_initiated_pie",
             )
 
@@ -1912,7 +1886,7 @@ def render_context_tab(df: pd.DataFrame):
             }
         )
 
-        st.dataframe(display_df, use_container_width=True)
+        st.dataframe(display_df, width="stretch")
 
 
 def render_location_tab(df: pd.DataFrame) -> None:
@@ -1928,7 +1902,7 @@ def render_location_tab(df: pd.DataFrame) -> None:
     with col1:
         fig = render_location_sessions_bar(df)
         if fig:
-            st.plotly_chart(fig, use_container_width=True, key="location_sessions_bar")
+            st.plotly_chart(fig, width="stretch", key="location_sessions_bar")
 
         if "location_label" in df.columns and "duration_seconds" in df.columns:
             grouped = df.groupby("location_label")["duration_seconds"].sum()
@@ -1958,14 +1932,12 @@ def render_location_tab(df: pd.DataFrame) -> None:
                 height=350,
                 margin=dict(l=120),
             )
-            st.plotly_chart(
-                fig, use_container_width=True, key="location_screen_time_bar"
-            )
+            st.plotly_chart(fig, width="stretch", key="location_screen_time_bar")
 
     with col2:
         fig = render_location_map(df)
         if fig:
-            st.plotly_chart(fig, use_container_width=True, key="location_map")
+            st.plotly_chart(fig, width="stretch", key="location_map")
 
 
 def render_dimensions_tab(dimensions: dict):
@@ -1981,7 +1953,7 @@ def render_dimensions_tab(dimensions: dict):
     with col1:
         fig = render_dimensions_radar(dimensions)
         if fig:
-            st.plotly_chart(fig, use_container_width=True, key="dimensions_radar")
+            st.plotly_chart(fig, width="stretch", key="dimensions_radar")
 
     with col2:
         st.markdown("### Dimension Details")
@@ -2004,9 +1976,7 @@ def render_dimensions_tab(dimensions: dict):
             if key in dimensions:
                 with g_col1 if i % 2 == 0 else g_col2:
                     fig = render_dimension_gauge(label, dimensions[key], low, high)
-                    st.plotly_chart(
-                        fig, use_container_width=True, key=f"dimensions_gauge_{key}"
-                    )
+                    st.plotly_chart(fig, width="stretch", key=f"dimensions_gauge_{key}")
 
 
 def render_results():
@@ -2221,9 +2191,7 @@ def render_survey_form():
                 horizontal=True,
             )
 
-        submit = st.form_submit_button(
-            "🚀 Generate Synthetic Persona", use_container_width=True
-        )
+        submit = st.form_submit_button("🚀 Generate Synthetic Persona", width="stretch")
 
         if submit:
             if not city or not occupation:
