@@ -1028,6 +1028,8 @@ def render_location_map(df: pd.DataFrame) -> go.Figure:
 
     # Filter out null coordinates
     df_map = df.dropna(subset=["latitude", "longitude"])
+    if "location_label" in df_map.columns:
+        df_map = df_map[df_map["location_label"] != "commute"]
 
     if df_map.empty:
         return go.Figure()
@@ -1951,8 +1953,8 @@ def render_location_tab(df: pd.DataFrame) -> None:
                 )
             )
             fig.update_layout(
-                title="Screen Time by Location",
-                xaxis_title="Time (minutes)",
+                title="Phone Usage Time by Location",
+                xaxis_title="Phone Usage Time (minutes)",
                 height=350,
                 margin=dict(l=120),
             )

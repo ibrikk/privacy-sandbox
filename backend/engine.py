@@ -1789,6 +1789,9 @@ class ScheduleGenerator:
     ) -> List[ScheduleSegment]:
         """
         Assign GPS coordinates to location labels based on the entered city.
+
+        Commute is treated as movement along the home-work corridor rather than
+        a single midpoint bubble.
         """
         city_lat, city_lon = self._get_city_coordinates(survey)
 
@@ -1813,7 +1816,6 @@ class ScheduleGenerator:
         location_coords = {
             "home": (home_lat, home_lon),
             "work": (work_lat, work_lon),
-            "commute": ((home_lat + work_lat) / 2, (home_lon + work_lon) / 2),
             "gym": (
                 home_lat + float(self.rng.normal(0, lat_scale * 0.2)),
                 home_lon + float(self.rng.normal(0, lon_scale2 * 0.2)),
@@ -1836,18 +1838,107 @@ class ScheduleGenerator:
             ),
         }
 
+        commute_segments = [
+            s for s in segments if (s.location_label or "").lower() == "commute"
+        ]
+
         for segment in segments:
             key = (segment.location_label or "home").lower()
-            coords = location_coords.get(
-                key,
-                (
-                    home_lat + float(self.rng.normal(0, lat_scale * 0.2)),
-                    home_lon + float(self.rng.normal(0, lon_scale2 * 0.2)),
-                ),
-            )
+
+            if key == "commute":
+                coords = self._get_commute_position(
+                    segment=segment,
+                    home_coords=(home_lat, home_lon),
+                    work_coords=(work_lat, work_lon),
+                    all_commute_segments=commute_segments,
+                )
+            else:
+                coords = location_coords.get(
+                    key,
+                    (
+                        home_lat + float(self.rng.normal(0, lat_scale * 0.2)),
+                        home_lon + float(self.rng.normal(0, lon_scale2 * 0.2)),
+                    ),
+                )
+
             segment.location_coords = (float(coords[0]), float(coords[1]))
 
         return segments
+
+    def _get_commute_position(
+        self,
+        segment: ScheduleSegment,
+        home_coords: Tuple[float, float],
+        work_coords: Tuple[float, float],
+        all_commute_segments: List[ScheduleSegment],
+    ) -> Tuple[float, float]:
+        """
+        Calculate a commute position along the home-work corridor.
+
+        Morning commute goes home -> work.
+        Evening commute goes work -> home.
+        """
+        home_lat, home_lon = home_coords
+        work_lat, work_lon = work_coords
+
+        segment_hour = segment.start_time.hour if segment.start_time else 8
+
+        if segment_hour < 12:
+            start_lat, start_lon = home_lat, home_lon
+            end_lat, end_lon = work_lat, work_lon
+        else:
+            start_lat, start_lon = work_lat, work_lon
+            end_lat, end_lon = home_lat, home_lon
+
+        progress = self._calculate_commute_progress(segment, all_commute_segments)
+
+        current_lat = start_lat + (end_lat - start_lat) * progress
+        current_lon = start_lon + (end_lon - start_lon) * progress
+
+        # Add a slight perpendicular deviation so commute is not a perfectly straight line
+        route_length = math.sqrt(
+            (end_lat - start_lat) ** 2 + (end_lon - start_lon) ** 2
+        )
+        if route_length > 0:
+            perp_lat = -(end_lon - start_lon) / route_length
+            perp_lon = (end_lat - start_lat) / route_length
+
+            offset_magnitude = 0.002 * math.sin(progress * math.pi)
+            current_lat += perp_lat * offset_magnitude * float(self.rng.uniform(-1, 1))
+            current_lon += perp_lon * offset_magnitude * float(self.rng.uniform(-1, 1))
+
+        return (float(current_lat), float(current_lon))
+
+    def _calculate_commute_progress(
+        self,
+        segment: ScheduleSegment,
+        all_commute_segments: List[ScheduleSegment],
+    ) -> float:
+        """
+        Return a progress value in [0, 1] for this commute segment.
+        """
+        if not segment.start_time or not segment.end_time:
+            return 0.5
+
+        segment_hour = segment.start_time.hour
+        is_morning = segment_hour < 12
+
+        same_direction = [
+            s
+            for s in all_commute_segments
+            if s.start_time and ((s.start_time.hour < 12) == is_morning)
+        ]
+
+        if len(same_direction) <= 1:
+            return 0.5
+
+        same_direction.sort(key=lambda s: s.start_time)
+
+        try:
+            index = same_direction.index(segment)
+            return 0.1 + (0.8 * index / (len(same_direction) - 1))
+        except ValueError:
+            return 0.5
 
     def _generate_base_location(self, area_type: AreaType) -> Tuple[float, float]:
         """Generate a plausible base location for the area type."""
@@ -1916,17 +2007,11 @@ class SessionPopulator:
         dimensions: BehavioralDimensions,
     ) -> List[PhoneSession]:
         """
-        Generate all phone sessions for a daily schedule.
-
-        Args:
-            schedule: Daily schedule with segments
-            parameters: Behavioral parameters
-            dimensions: Behavioral dimensions for fine-tuning
-
-        Returns:
-            List of PhoneSession objects covering the day
+        Generate all phone sessions for a daily schedule and reconcile
+        the final total duration to the persona's target daily screen time.
         """
-        all_sessions = []
+
+        all_sessions: List[PhoneSession] = []
 
         for segment in schedule.segments:
             if not segment.phone_accessible:
@@ -1940,11 +2025,105 @@ class SessionPopulator:
         # Sort by timestamp
         all_sessions.sort(key=lambda s: s.timestamp)
 
+        # Reconcile total duration to match target daily minutes
+        all_sessions = self._reconcile_total_daily_duration(
+            all_sessions,
+            target_total_minutes=float(parameters.total_daily_minutes),
+        )
+
         # Assign sequential session IDs
         for i, session in enumerate(all_sessions):
             session.session_id = f"{schedule.date}_{i:04d}"
 
         return all_sessions
+
+    def _reconcile_total_daily_duration(
+        self,
+        sessions: List[PhoneSession],
+        target_total_minutes: float,
+    ) -> List[PhoneSession]:
+        """
+        Scale generated session durations so the final day total is close
+        to the persona's target total_daily_minutes.
+
+        Strategy:
+        - Keep glance sessions relatively stable
+        - Scale engaged sessions more aggressively
+        - Clamp all durations to reasonable bounds
+        """
+        if not sessions:
+            return sessions
+
+        target_total_seconds = max(0.0, float(target_total_minutes) * 60.0)
+        current_total_seconds = sum(float(s.duration_seconds) for s in sessions)
+
+        if current_total_seconds <= 0 or target_total_seconds <= 0:
+            return sessions
+
+        # If already close enough, leave as-is
+        ratio = target_total_seconds / current_total_seconds
+        if 0.85 <= ratio <= 1.15:
+            return sessions
+
+        glance_sessions = [s for s in sessions if bool(s.is_glance)]
+        engaged_sessions = [s for s in sessions if not bool(s.is_glance)]
+
+        current_glance_total = sum(float(s.duration_seconds) for s in glance_sessions)
+        current_engaged_total = sum(float(s.duration_seconds) for s in engaged_sessions)
+
+        # Keep glances mostly intact, but allow modest movement
+        target_glance_total = current_glance_total * min(max(ratio, 0.75), 1.25)
+        target_engaged_total = max(0.0, target_total_seconds - target_glance_total)
+
+        engaged_scale = (
+            target_engaged_total / current_engaged_total
+            if current_engaged_total > 0
+            else 1.0
+        )
+
+        glance_scale = (
+            target_glance_total / current_glance_total
+            if current_glance_total > 0
+            else 1.0
+        )
+
+        # Clamp scaling so one weird day does not create crazy sessions
+        engaged_scale = min(max(engaged_scale, 0.5), 6.0)
+        glance_scale = min(max(glance_scale, 0.8), 1.5)
+
+        for session in sessions:
+            original = float(session.duration_seconds)
+
+            if bool(session.is_glance):
+                new_duration = original * glance_scale
+                new_duration = max(
+                    LiteratureConstants.GLANCE_DURATION_MIN,
+                    min(new_duration, LiteratureConstants.GLANCE_DURATION_MAX),
+                )
+            else:
+                new_duration = original * engaged_scale
+                new_duration = max(15.0, min(new_duration, 3600.0))
+
+            session.duration_seconds = float(new_duration)
+
+        # Small second pass to tighten final total if still off
+        final_total = sum(float(s.duration_seconds) for s in sessions)
+        if final_total > 0:
+            correction = target_total_seconds / final_total
+            correction = min(max(correction, 0.85), 1.2)
+
+            for session in sessions:
+                adjusted = float(session.duration_seconds) * correction
+                if bool(session.is_glance):
+                    adjusted = max(
+                        LiteratureConstants.GLANCE_DURATION_MIN,
+                        min(adjusted, LiteratureConstants.GLANCE_DURATION_MAX),
+                    )
+                else:
+                    adjusted = max(15.0, min(adjusted, 3600.0))
+                session.duration_seconds = float(adjusted)
+
+        return sessions
 
     def _populate_segment(
         self,
