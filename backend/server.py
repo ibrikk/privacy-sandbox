@@ -422,25 +422,25 @@ async def delete_all_personas_endpoint(_: bool = Depends(require_admin)):
     }
 
 
-def create_llm_client() -> ChatGroq:
+def create_llm_client() -> ChatOpenAI:
     """Create the chat model used for contextual day variation."""
     load_dotenv()
 
-    api_key = os.getenv("GROQ_API_KEY")
-    # api_key = os.getenv("OPENAI_API_KEY")
+    # api_key = os.getenv("GROQ_API_KEY")
+    api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError("GROQ_API_KEY not found in environment or .env file")
 
-    return ChatGroq(
-        model="llama-3.3-70b-versatile",
-        api_key=SecretStr(api_key),
-        temperature=0.3,
-    )
-
-    # return ChatOpenAI(
-    #     model="gpt-4.1-mini",
-    #     temperature=0,
+    # return ChatGroq(
+    #     model="llama-3.3-70b-versatile",
+    #     api_key=SecretStr(api_key),
+    #     temperature=0.3,
     # )
+
+    return ChatOpenAI(
+        model="gpt-4.1-mini",
+        temperature=0,
+    )
 
 
 # ============================================================

@@ -20,6 +20,7 @@ Version: 2.0.0
 """
 
 from datetime import date, datetime, time, timedelta
+import math
 from typing import Any, Dict, List, Literal, Optional, Tuple
 import numpy as np
 from collections import defaultdict
@@ -1323,8 +1324,14 @@ class ScheduleGenerator:
     with appropriate activities and contexts based on survey input.
     """
 
-    def __init__(self, seed: Optional[int] = None):
+    def __init__(
+        self,
+        seed: Optional[int] = None,
+        context_enhancer: Optional["LLMContextEnhancer"] = None,
+    ):
         self.rng = np.random.default_rng(seed)
+        self.context_enhancer = context_enhancer
+        self._city_coords_cache: Dict[str, Tuple[float, float]] = {}
 
     def _should_commute_today(
         self,
@@ -1785,40 +1792,64 @@ class ScheduleGenerator:
         self, segments: List[ScheduleSegment], survey: ComprehensiveSurveyInput
     ) -> List[ScheduleSegment]:
         """
-        Assign GPS coordinates to location labels.
+        Assign GPS coordinates to location labels based on the entered city.
         """
-        home_lat, home_lon = self._generate_base_location(survey.area_type)
+        city_lat, city_lon = self._get_city_coordinates(survey)
 
-        offset_scale = LiteratureConstants.RADIUS_OF_GYRATION_KM[survey.area_type] / 111
+        # home = small neighborhood offset from city center
+        home_lat = city_lat + float(self.rng.normal(0, 0.008))
+        home_lon = city_lon + float(self.rng.normal(0, 0.008))
+
+        work_distance_km = self._get_work_distance_km(survey.commute_time)
+
+        # avoid division issues near poles
+        lon_scale = max(0.1, math.cos(math.radians(home_lat)))
+        km_per_lon_degree = 111.0 * lon_scale
+
+        angle = float(self.rng.uniform(0, 2 * math.pi))
+        work_lat = home_lat + (work_distance_km / 111.0) * math.sin(angle)
+        work_lon = home_lon + (work_distance_km / km_per_lon_degree) * math.cos(angle)
+
+        radius_km = LiteratureConstants.RADIUS_OF_GYRATION_KM.get(survey.area_type, 6.0)
+        lat_scale = radius_km / 111.0
+        lon_scale2 = radius_km / km_per_lon_degree
 
         location_coords = {
             "home": (home_lat, home_lon),
-            "work": (
-                home_lat + self.rng.normal(0, offset_scale * 0.5),
-                home_lon + self.rng.normal(0, offset_scale * 0.5),
-            ),
-            "commute": (
-                home_lat + self.rng.normal(0, offset_scale * 0.3),
-                home_lon + self.rng.normal(0, offset_scale * 0.3),
-            ),
+            "work": (work_lat, work_lon),
+            "commute": ((home_lat + work_lat) / 2, (home_lon + work_lon) / 2),
             "gym": (
-                home_lat + self.rng.normal(0, offset_scale * 0.2),
-                home_lon + self.rng.normal(0, offset_scale * 0.2),
+                home_lat + float(self.rng.normal(0, lat_scale * 0.2)),
+                home_lon + float(self.rng.normal(0, lon_scale2 * 0.2)),
             ),
             "errands": (
-                home_lat + self.rng.normal(0, offset_scale * 0.4),
-                home_lon + self.rng.normal(0, offset_scale * 0.4),
+                home_lat + float(self.rng.normal(0, lat_scale * 0.3)),
+                home_lon + float(self.rng.normal(0, lon_scale2 * 0.3)),
             ),
             "outside": (
-                home_lat + self.rng.normal(0, offset_scale * 0.6),
-                home_lon + self.rng.normal(0, offset_scale * 0.6),
+                home_lat + float(self.rng.normal(0, lat_scale * 0.4)),
+                home_lon + float(self.rng.normal(0, lon_scale2 * 0.4)),
+            ),
+            "social": (
+                home_lat + float(self.rng.normal(0, lat_scale * 0.4)),
+                home_lon + float(self.rng.normal(0, lon_scale2 * 0.4)),
+            ),
+            "leisure": (
+                home_lat + float(self.rng.normal(0, lat_scale * 0.3)),
+                home_lon + float(self.rng.normal(0, lon_scale2 * 0.3)),
             ),
         }
 
         for segment in segments:
-            if segment.location_label in location_coords:
-                coords = location_coords[segment.location_label]
-                segment.location_coords = (float(coords[0]), float(coords[1]))
+            key = (segment.location_label or "home").lower()
+            coords = location_coords.get(
+                key,
+                (
+                    home_lat + float(self.rng.normal(0, lat_scale * 0.2)),
+                    home_lon + float(self.rng.normal(0, lon_scale2 * 0.2)),
+                ),
+            )
+            segment.location_coords = (float(coords[0]), float(coords[1]))
 
         return segments
 
@@ -1835,6 +1866,35 @@ class ScheduleGenerator:
             lon = self.rng.uniform(-115.0, -80.0)
 
         return lat, lon
+
+    def _get_city_coordinates(
+        self, survey: ComprehensiveSurveyInput
+    ) -> Tuple[float, float]:
+        city = (survey.city or "").strip()
+
+        if city in self._city_coords_cache:
+            return self._city_coords_cache[city]
+
+        if self.context_enhancer is not None:
+            coords = self.context_enhancer.get_city_coordinates(city)
+        else:
+            coords = (40.7128, -74.0060)
+
+        self._city_coords_cache[city] = coords
+        return coords
+
+    def _get_work_distance_km(self, commute_time: CommuteTime) -> float:
+        """
+        Use commute_time only. Keep this simple.
+        """
+        mapping = {
+            CommuteTime.ALMOST_NONE: 1.0,
+            CommuteTime.LESS_THAN_30: 5.0,
+            CommuteTime.THIRTY_TO_60: 12.0,
+            CommuteTime.ONE_TO_TWO_HOURS: 25.0,
+            CommuteTime.MORE_THAN_2_HOURS: 40.0,
+        }
+        return mapping.get(commute_time, 5.0)
 
 
 class SessionPopulator:
@@ -2725,13 +2785,16 @@ class PersonaEngine:
     This is the primary interface used by the API server.
     """
 
-    def __init__(self, llm_client: Optional[Any] = None):
+    def __init__(self, llm_client: Optional[Any] = None, seed: Optional[int] = None):
         """Initialize the engine components."""
         self.dimension_extractor = DimensionExtractor()
         self.parameter_deriver = ParameterDeriver()
-        self.schedule_generator = ScheduleGenerator()
-        self.session_populator = SessionPopulator()
-        self.context_enhancer = LLMContextEnhancer(llm_client)
+        self.context_enhancer = LLMContextEnhancer(llm_client, seed=seed)
+        self.schedule_generator = ScheduleGenerator(
+            seed=seed,
+            context_enhancer=self.context_enhancer,
+        )
+        self.session_populator = SessionPopulator(seed)
 
     def generate_persona(
         self, survey: ComprehensiveSurveyInput

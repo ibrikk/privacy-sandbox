@@ -1,6 +1,6 @@
 import json
 import re
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage
@@ -347,3 +347,53 @@ class LLMContextEnhancer:
             return "\n".join(parts)
 
         return str(content)
+
+    def get_city_coordinates(self, city: str) -> Tuple[float, float]:
+        """
+        Get latitude/longitude for any city using LLM.
+
+        Args:
+            city: City name from survey (any city in the world)
+
+        Returns:
+            Tuple of (latitude, longitude)
+        """
+        try:
+            coords = self._llm_geocode(city)
+            if coords:
+                print(f"✅ Geocoded '{city}' → {coords}")
+                return coords
+        except Exception as e:
+            print(f"⚠️ LLM geocoding failed for '{city}': {e}")
+
+        # Simple fallback (generic coordinates)
+        print(f"⚠️ Using fallback coordinates for: {city}")
+        return (40.7128, -74.0060)  # Default fallback
+
+    def _llm_geocode(self, city: str) -> Optional[Tuple[float, float]]:
+        """
+        Ask the LLM for approximate city coordinates.
+        """
+        if self.llm_client is None:
+            return None
+
+        prompt = f"""What are the approximate latitude and longitude coordinates for: {city}
+
+        Return ONLY a JSON object with this exact format:
+        {{"latitude": <number>, "longitude": <number>}}"""
+
+        response = self.llm_client.invoke([HumanMessage(content=prompt)])
+        response_text = self._content_to_text(response.content).strip()
+
+        match = re.search(r"\{.*\}", response_text, re.DOTALL)
+        if not match:
+            return None
+
+        data = json.loads(match.group(0))
+        lat = float(data["latitude"])
+        lon = float(data["longitude"])
+
+        if -90 <= lat <= 90 and -180 <= lon <= 180:
+            return (lat, lon)
+
+        return None
