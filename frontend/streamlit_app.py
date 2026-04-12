@@ -5,7 +5,7 @@ import pandas as pd
 import requests
 import json
 from datetime import datetime, date, timedelta
-from typing import List, Optional
+from typing import List, Optional, Any, cast
 import numpy as np
 
 # Plotly for visualizations
@@ -1979,6 +1979,453 @@ def render_dimensions_tab(dimensions: dict):
                     st.plotly_chart(fig, width="stretch", key=f"dimensions_gauge_{key}")
 
 
+def render_session_drilldown(df: pd.DataFrame) -> None:
+    """Interactive drill-down to explore individual sessions."""
+    if df.empty:
+        st.warning("No session data available.")
+        return
+
+    def _to_float_scalar(value: Any) -> float | None:
+        if value is None or isinstance(value, bool):
+            return None
+
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _format_time_scalar(value: Any) -> str:
+        if value is None:
+            return "N/A"
+        if isinstance(value, pd.Timestamp):
+            return value.strftime("%H:%M:%S")
+        if isinstance(value, datetime):
+            return value.strftime("%H:%M:%S")
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return "N/A"
+            parsed = pd.to_datetime(text, errors="coerce")
+            if isinstance(parsed, pd.Timestamp):
+                return parsed.strftime("%H:%M:%S")
+            return "N/A"
+        return "N/A"
+
+    def _format_duration_scalar(value: Any) -> tuple[float, str]:
+        try:
+            seconds = float(value)
+        except (TypeError, ValueError):
+            seconds = 0.0
+        return seconds, f"{int(seconds // 60)}m {int(seconds % 60)}s"
+
+    def _is_true_scalar(value: Any) -> bool:
+        return value is True
+
+    st.markdown(
+        '<p class="section-header">🔍 Session Explorer</p>',
+        unsafe_allow_html=True,
+    )
+    st.markdown("Select filters to drill down into specific sessions.")
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        if "hour" in df.columns:
+            hour_values: list[int] = []
+            for raw_value in df["hour"].tolist():
+                if raw_value is None or pd.isna(raw_value):
+                    continue
+                try:
+                    hour_values.append(int(float(raw_value)))
+                except (TypeError, ValueError):
+                    continue
+
+            hours_with_sessions = sorted(set(hour_values))
+        else:
+            hours_with_sessions = list(range(24))
+
+        hour_options: dict[str, int | None] = {"All Hours": None}
+        if "hour" in df.columns:
+            hour_numeric = pd.to_numeric(df["hour"], errors="coerce")
+            for h in hours_with_sessions:
+                session_count = sum(
+                    1
+                    for raw_value in df["hour"].tolist()
+                    if raw_value is not None
+                    and not pd.isna(raw_value)
+                    and int(float(raw_value)) == h
+                )
+                label = f"{h}:00 - {h}:59 ({session_count} sessions)"
+                hour_options[label] = h
+        else:
+            for h in hours_with_sessions:
+                hour_options[f"{h}:00 - {h}:59"] = h
+
+        selected_hour_label = st.selectbox(
+            "🕐 Filter by Hour",
+            options=list(hour_options.keys()),
+            index=0,
+            key="drilldown_hour",
+        )
+        selected_hour = hour_options[selected_hour_label]
+
+    with col2:
+        selected_app: str | None = None
+        if "app_category" in df.columns:
+            app_series = df["app_category"].dropna().astype("string")
+            app_categories = sorted(str(v) for v in app_series.unique().tolist())
+
+            app_options = ["All Apps"] + [
+                cat.replace("_", " ").title() for cat in app_categories
+            ]
+
+            selected_app_display = st.selectbox(
+                "📱 Filter by App",
+                app_options,
+                index=0,
+                key="drilldown_app",
+            )
+            if selected_app_display != "All Apps":
+                selected_app = selected_app_display.lower().replace(" ", "_")
+
+    with col3:
+        selected_context: str | None = None
+        if "context" in df.columns:
+            context_series = df["context"].dropna().map(normalize_context_label)
+            contexts = sorted(str(v) for v in context_series.unique().tolist())
+
+            context_options = ["All Contexts"] + [
+                ctx.replace("_", " ").title() for ctx in contexts
+            ]
+
+            selected_context_display = st.selectbox(
+                "🎯 Filter by Context",
+                context_options,
+                index=0,
+                key="drilldown_context",
+            )
+            if selected_context_display != "All Contexts":
+                selected_context = selected_context_display.lower().replace(" ", "_")
+
+    col4, col5, col6 = st.columns(3)
+
+    with col4:
+        session_type_filter = st.selectbox(
+            "👁️ Session Type",
+            ["All", "Glances Only", "Engaged Only"],
+            index=0,
+            key="drilldown_session_type",
+        )
+
+    with col5:
+        initiated_filter = st.selectbox(
+            "👤 Initiated By",
+            ["All", "User Initiated", "System/Notification"],
+            index=0,
+            key="drilldown_initiated",
+        )
+
+    with col6:
+        sort_by = st.selectbox(
+            "📊 Sort By",
+            [
+                "Time (earliest first)",
+                "Time (latest first)",
+                "Duration (longest first)",
+                "Duration (shortest first)",
+            ],
+            index=0,
+            key="drilldown_sort",
+        )
+
+    filtered_df = df.copy()
+
+    if selected_hour is not None and "hour" in filtered_df.columns:
+        hour_numeric = pd.to_numeric(filtered_df["hour"], errors="coerce")
+        filtered_df = filtered_df.loc[hour_numeric == selected_hour]
+
+    if selected_app is not None and "app_category" in filtered_df.columns:
+        app_series = filtered_df["app_category"].astype("string")
+        filtered_df = filtered_df.loc[app_series == selected_app]
+
+    if selected_context is not None and "context" in filtered_df.columns:
+        context_series = filtered_df["context"].map(normalize_context_label)
+        filtered_df = filtered_df.loc[context_series == selected_context]
+
+    if session_type_filter == "Glances Only" and "is_glance" in filtered_df.columns:
+        glance_series = filtered_df["is_glance"].map(lambda v: v is True)
+        filtered_df = filtered_df.loc[glance_series]
+    elif session_type_filter == "Engaged Only" and "is_glance" in filtered_df.columns:
+        glance_series = filtered_df["is_glance"].map(lambda v: v is True)
+        filtered_df = filtered_df.loc[~glance_series]
+
+    if (
+        initiated_filter == "User Initiated"
+        and "is_user_initiated" in filtered_df.columns
+    ):
+        initiated_series = filtered_df["is_user_initiated"].map(lambda v: v is True)
+        filtered_df = filtered_df.loc[initiated_series]
+    elif (
+        initiated_filter == "System/Notification"
+        and "is_user_initiated" in filtered_df.columns
+    ):
+        initiated_series = filtered_df["is_user_initiated"].map(lambda v: v is True)
+        filtered_df = filtered_df.loc[~initiated_series]
+
+    if "timestamp" in filtered_df.columns:
+        timestamp_series = pd.to_datetime(filtered_df["timestamp"], errors="coerce")
+        if sort_by == "Time (earliest first)":
+            filtered_df = filtered_df.assign(_sort_ts=timestamp_series).sort_values(
+                "_sort_ts",
+                ascending=True,
+            )
+        elif sort_by == "Time (latest first)":
+            filtered_df = filtered_df.assign(_sort_ts=timestamp_series).sort_values(
+                "_sort_ts",
+                ascending=False,
+            )
+
+    if "duration_seconds" in filtered_df.columns:
+        duration_series = pd.to_numeric(
+            filtered_df["duration_seconds"],
+            errors="coerce",
+        )
+        if sort_by == "Duration (longest first)":
+            filtered_df = filtered_df.assign(
+                _sort_duration=duration_series
+            ).sort_values(
+                "_sort_duration",
+                ascending=False,
+            )
+        elif sort_by == "Duration (shortest first)":
+            filtered_df = filtered_df.assign(
+                _sort_duration=duration_series
+            ).sort_values(
+                "_sort_duration",
+                ascending=True,
+            )
+
+    filtered_df = filtered_df.drop(
+        columns=["_sort_ts", "_sort_duration"],
+        errors="ignore",
+    )
+
+    st.divider()
+
+    col_s1, col_s2, col_s3, col_s4 = st.columns(4)
+    with col_s1:
+        st.metric("Sessions Found", len(filtered_df), delta=f"of {len(df)} total")
+    with col_s2:
+        if "duration_seconds" in filtered_df.columns and len(filtered_df) > 0:
+            total_seconds = 0.0
+            for raw_value in filtered_df["duration_seconds"].tolist():
+                if (
+                    raw_value is None
+                    or pd.isna(raw_value)
+                    or isinstance(raw_value, bool)
+                ):
+                    continue
+                try:
+                    total_seconds += float(raw_value)
+                except (TypeError, ValueError):
+                    continue
+
+            total_time = total_seconds / 60.0
+            st.metric("Total Time", f"{total_time:.1f} min")
+        else:
+            st.metric("Total Time", "N/A")
+    with col_s3:
+        if "duration_seconds" in filtered_df.columns and len(filtered_df) > 0:
+            duration_values: list[float] = []
+
+            for raw_value in filtered_df["duration_seconds"].tolist():
+                if (
+                    raw_value is None
+                    or isinstance(raw_value, bool)
+                    or pd.isna(raw_value)
+                ):
+                    continue
+
+                try:
+                    duration_values.append(float(raw_value))
+                except (TypeError, ValueError):
+                    continue
+
+            avg_dur_value = (
+                sum(duration_values) / len(duration_values)
+                if len(duration_values) > 0
+                else 0.0
+            )
+
+            st.metric("Avg Duration", f"{avg_dur_value:.1f}s")
+        else:
+            st.metric("Avg Duration", "N/A")
+    with col_s4:
+        if "is_glance" in filtered_df.columns and len(filtered_df) > 0:
+            glance_pct = (
+                filtered_df["is_glance"].map(lambda v: v is True).mean() * 100.0
+            )
+            st.metric("Glance Rate", f"{glance_pct:.1f}%")
+        else:
+            st.metric("Glance Rate", "N/A")
+
+    st.divider()
+
+    if len(filtered_df) == 0:
+        st.info("No sessions match the selected filters. Try adjusting your criteria.")
+        return
+
+    display_df = filtered_df.copy()
+
+    if "timestamp" in display_df.columns:
+        parsed_timestamps = pd.to_datetime(display_df["timestamp"], errors="coerce")
+        display_df["Time"] = parsed_timestamps.dt.strftime("%H:%M:%S").fillna("N/A")
+
+    if "app_category" in display_df.columns:
+        display_df["App"] = (
+            display_df["app_category"]
+            .astype("string")
+            .str.replace("_", " ", regex=False)
+            .str.title()
+        )
+
+    if "duration_seconds" in display_df.columns:
+        duration_numeric = pd.to_numeric(
+            display_df["duration_seconds"], errors="coerce"
+        )
+
+        def _format_duration_display(x: Any) -> str:
+            if x is None or isinstance(x, bool) or pd.isna(x):
+                return "N/A"
+            try:
+                seconds = float(x)
+            except (TypeError, ValueError):
+                return "N/A"
+            return f"{int(seconds // 60)}m {int(seconds % 60)}s"
+
+        display_df["Duration"] = [
+            _format_duration_display(x) for x in display_df["duration_seconds"].tolist()
+        ]
+
+    if "activity" in display_df.columns:
+        display_df["Activity"] = (
+            display_df["activity"]
+            .astype("string")
+            .str.replace("_", " ", regex=False)
+            .str.title()
+        )
+
+    if "context" in display_df.columns:
+        display_df["Context"] = display_df["context"].map(
+            lambda x: (
+                normalize_context_label(x).replace("_", " ").title()
+                if pd.notna(x)
+                else "N/A"
+            )
+        )
+
+    if "location_label" in display_df.columns:
+        display_df["Location"] = (
+            display_df["location_label"]
+            .astype("string")
+            .str.replace("_", " ", regex=False)
+            .str.title()
+        )
+
+    if "is_glance" in display_df.columns:
+        display_df["Type"] = display_df["is_glance"].map(
+            lambda x: "👁️ Glance" if x is True else "📱 Engaged"
+        )
+
+    if "is_user_initiated" in display_df.columns:
+        display_df["Initiated"] = display_df["is_user_initiated"].map(
+            lambda x: "👤 User" if x is True else "🔔 System"
+        )
+
+    display_columns = [
+        "Time",
+        "App",
+        "Duration",
+        "Activity",
+        "Context",
+        "Location",
+        "Type",
+        "Initiated",
+    ]
+    display_columns = [col for col in display_columns if col in display_df.columns]
+
+    st.markdown(f"**📋 Session List** ({len(filtered_df)} sessions)")
+
+    st.dataframe(
+        display_df.loc[:, display_columns],
+        use_container_width=True,
+        hide_index=True,
+        height=min(400, len(filtered_df) * 35 + 38),
+    )
+
+    st.divider()
+    st.markdown("**📝 Session Details** (click to expand)")
+
+    max_display = 30
+    sessions_to_show = cast(pd.DataFrame, filtered_df.head(max_display))
+
+    row_records = cast(list[dict[str, Any]], sessions_to_show.to_dict(orient="records"))
+
+    for row_dict in row_records:
+
+        time_str = _format_time_scalar(row_dict.get("timestamp"))
+        app_str = str(row_dict.get("app_category", "unknown")).replace("_", " ").title()
+
+        dur_sec, dur_str = _format_duration_scalar(row_dict.get("duration_seconds"))
+        is_glance = _is_true_scalar(row_dict.get("is_glance"))
+        is_user_initiated = _is_true_scalar(row_dict.get("is_user_initiated"))
+
+        glance_icon = "👁️" if is_glance else "📱"
+        expander_title = f"{glance_icon} **{time_str}** — {app_str} ({dur_str})"
+
+        with st.expander(expander_title):
+            col_a, col_b, col_c = st.columns(3)
+
+            with col_a:
+                st.markdown("**📍 Context**")
+                st.write(
+                    f"Activity: {str(row_dict.get('activity', 'N/A')).replace('_', ' ').title()}"
+                )
+                st.write(
+                    f"Context: {normalize_context_label(row_dict.get('context', 'N/A')).replace('_', ' ').title()}"
+                )
+                st.write(
+                    f"Location: {str(row_dict.get('location_label', 'N/A')).replace('_', ' ').title()}"
+                )
+
+            with col_b:
+                st.markdown("**📱 Session Info**")
+                st.write(f"Type: {'Quick Glance' if is_glance else 'Engaged Session'}")
+                st.write(
+                    f"Initiated: {'User opened app' if is_user_initiated else 'Notification/System'}"
+                )
+                st.write(f"Duration: {dur_str} ({dur_sec:.0f}s)")
+
+            with col_c:
+                st.markdown("**🗺️ Location Data**")
+                lat_raw = row_dict.get("latitude")
+                lon_raw = row_dict.get("longitude")
+
+                lat_num = _to_float_scalar(lat_raw)
+                lon_num = _to_float_scalar(lon_raw)
+
+                if lat_num is not None and lon_num is not None:
+                    st.write(f"Lat: {lat_num:.4f}")
+                    st.write(f"Lon: {lon_num:.4f}")
+                else:
+                    st.write("Coordinates: N/A")
+
+    if len(filtered_df) > max_display:
+        st.caption(
+            f"⚠️ Showing first {max_display} sessions. Use filters above to narrow down."
+        )
+
+
 def render_results():
     """Render the results dashboard."""
     result = st.session_state.generation_result
@@ -2008,6 +2455,7 @@ def render_results():
         [
             "📊 Overview",
             "🧠 Dimensions",
+            "🔍 Explorer",  # <-- NEW TAB
             "👁️ Glances",
             "⏱️ Sessions",
             "📱 Apps",
@@ -2023,22 +2471,25 @@ def render_results():
     with tabs[1]:
         render_dimensions_tab(dimensions)
 
-    with tabs[2]:
-        render_glances_tab(df)
+    with tabs[2]:  # <-- NEW
+        render_session_drilldown(df)
 
     with tabs[3]:
-        render_sessions_tab(df)
+        render_glances_tab(df)
 
     with tabs[4]:
-        render_apps_tab(df)
+        render_sessions_tab(df)
 
     with tabs[5]:
-        render_temporal_tab(df, schedule)
+        render_apps_tab(df)
 
     with tabs[6]:
-        render_context_tab(df)
+        render_temporal_tab(df, schedule)
 
     with tabs[7]:
+        render_context_tab(df)
+
+    with tabs[8]:
         render_location_tab(df)
 
 
