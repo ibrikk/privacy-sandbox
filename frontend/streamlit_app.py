@@ -1655,16 +1655,16 @@ def render_temporal_tab(df: pd.DataFrame, schedule: dict):
 
     col1, col2 = st.columns(2)
 
+    # with col1:
+    #     fig = render_sessions_by_hour_line(df)
+    #     if fig:
+    #         st.plotly_chart(fig, width="stretch", key="temporal_sessions_by_hour")
+
+    #     fig = render_glance_timeline(df)
+    #     if fig:
+    #         st.plotly_chart(fig, width="stretch", key="temporal_glance_timeline")
+
     with col1:
-        fig = render_sessions_by_hour_line(df)
-        if fig:
-            st.plotly_chart(fig, width="stretch", key="temporal_sessions_by_hour")
-
-        fig = render_glance_timeline(df)
-        if fig:
-            st.plotly_chart(fig, width="stretch", key="temporal_glance_timeline")
-
-    with col2:
         fig = render_activity_time_distribution(df)
         if fig:
             st.plotly_chart(
@@ -2454,43 +2454,43 @@ def render_results():
     tabs = st.tabs(
         [
             "📊 Overview",
-            "🧠 Dimensions",
-            "🔍 Explorer",  # <-- NEW TAB
+            # "🧠 Dimensions",
+            "🔍 Explorer",
             "👁️ Glances",
             "⏱️ Sessions",
             "📱 Apps",
             "🕐 Temporal",
             "🎯 Context",
-            "📍 Location",
+            # "📍 Location",
         ]
     )
 
     with tabs[0]:
         render_overview_tab(df, schedule, dimensions, survey_summary)
 
-    with tabs[1]:
-        render_dimensions_tab(dimensions)
+    # with tabs[1]:
+    #     render_dimensions_tab(dimensions)
 
-    with tabs[2]:  # <-- NEW
+    with tabs[1]:
         render_session_drilldown(df)
 
-    with tabs[3]:
+    with tabs[2]:
         render_glances_tab(df)
 
-    with tabs[4]:
+    with tabs[3]:
         render_sessions_tab(df)
 
-    with tabs[5]:
+    with tabs[4]:
         render_apps_tab(df)
 
-    with tabs[6]:
+    with tabs[5]:
         render_temporal_tab(df, schedule)
 
-    with tabs[7]:
+    with tabs[6]:
         render_context_tab(df)
 
-    with tabs[8]:
-        render_location_tab(df)
+    # with tabs[8]:
+    #     render_location_tab(df)
 
 
 def render_survey_form():
