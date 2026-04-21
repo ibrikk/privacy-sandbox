@@ -2231,56 +2231,90 @@ class SessionPopulator:
         )
         adjusted_rate *= float(activity_suppression)
 
-        # Apply temporal peak weighting using the segment midpoint hour
-        midpoint_minutes = start_minutes + (segment_duration / 2.0)
-        midpoint_hour = int(midpoint_minutes // 60) % 24
-        peak_factor = self._calculate_peak_factor(
-            midpoint_hour,
-            int(parameters.temporal_peak_hour),
-        )
+        start_hour = start_minutes // 60
+        end_hour = ((end_minutes - 1) // 60) + 1  # Ceiling to include partial hours
 
-        adjusted_rate *= float(peak_factor)
+        # Daily jitter for peak hour (so not every day peaks at exactly the same time)
+        peak_jitter = float(self.rng.normal(0, 1.0))
+        effective_peak = (
+            int(parameters.temporal_peak_hour) + int(round(peak_jitter))
+        ) % 24
 
-        expected_sessions = adjusted_rate * float(segment_duration)
+        for hour in range(start_hour, min(end_hour, 24)):
+            # Calculate this hour's time boundaries within the segment
+            hour_start = max(start_minutes, hour * 60)
+            hour_end = min(end_minutes, (hour + 1) * 60)
+            hour_duration = hour_end - hour_start
 
-        # Sample actual number of sessions
-        n_sessions = int(self.rng.poisson(max(0.05, expected_sessions)))
+            if hour_duration <= 0:
+                continue
 
-        # Hard cap commute so it never floods the day with short checks
-        if segment.activity == ActivityType.COMMUTING:
-            commute_cap = max(1, min(4, int(round(segment_duration / 20))))
-            n_sessions = min(n_sessions, commute_cap)
+            # Calculate peak factor for THIS SPECIFIC HOUR
+            peak_factor = self._calculate_peak_factor(hour, effective_peak)
 
-        if n_sessions <= 0:
-            return sessions
+            # Expected sessions for this hour
+            hourly_rate = adjusted_rate * float(peak_factor)
+            expected_sessions = hourly_rate * float(hour_duration)
 
-        timestamps = self._generate_session_timestamps(
-            start_minutes,
-            end_minutes,
-            n_sessions,
-            parameters,
-        )
+            # Sample actual session count
+            n_sessions = int(self.rng.poisson(max(0.01, expected_sessions)))
 
-        for ts_minutes in timestamps:
-            session = self._generate_single_session(
-                ts_minutes,
-                date,
-                segment,
-                parameters,
-                dimensions,
+            # Commute cap per hour
+            if segment.activity == ActivityType.COMMUTING:
+                n_sessions = min(n_sessions, 2)
+
+            if n_sessions <= 0:
+                continue
+
+            # Generate timestamps within this hour
+            timestamps = self._generate_timestamps_in_range(
+                hour_start, hour_end, n_sessions
             )
-            sessions.append(session)
+
+            for ts_minutes in timestamps:
+                session = self._generate_single_session(
+                    ts_minutes, date, segment, parameters, dimensions
+                )
+                sessions.append(session)
 
         return sessions
 
+    def _generate_timestamps_in_range(
+        self,
+        start_minutes: int,
+        end_minutes: int,
+        n_sessions: int,
+    ) -> List[int]:
+        """
+        Generate n_sessions random timestamps uniformly within [start, end) minutes.
+        """
+        if n_sessions <= 0 or end_minutes <= start_minutes:
+            return []
+
+        # Uniform distribution within the time range
+        timestamps = [
+            int(self.rng.integers(start_minutes, end_minutes))
+            for _ in range(n_sessions)
+        ]
+        return sorted(timestamps)
+
     def _calculate_peak_factor(self, hour: int, peak_hour: int) -> float:
         """
-        Calculate stronger temporal peak adjustment factor.
-        """
-        distance = min(abs(hour - peak_hour), 24 - abs(hour - peak_hour))
-        factor = np.exp(-(distance**2) / (2 * 2.5**2))
+        Calculate temporal peak adjustment factor with strong contrast.
 
-        return 0.2 + (1.8 * float(factor))
+        Returns ~0.05 at 12 hours from peak, ~3.0 at peak hour.
+        """
+        # Circular distance (handles wraparound at midnight)
+        distance = min(abs(hour - peak_hour), 24 - abs(hour - peak_hour))
+
+        # Narrower sigma = sharper peak
+        sigma = 2.0  # Slightly wider than 1.5 for smoother curve
+
+        # Gaussian decay
+        gaussian = float(np.exp(-(distance**2) / (2 * sigma**2)))
+
+        # Range: 0.05 (12 hours away) to 3.0 (at peak)
+        return 0.05 + (2.95 * gaussian)
 
     def _generate_session_timestamps(
         self,
@@ -2304,7 +2338,13 @@ class SessionPopulator:
         if segment_length <= 0:
             return []
 
-        peak_hour = int(parameters.temporal_peak_hour)
+        # Add daily jitter to peak hour (±1.5 hours variation day-to-day)
+        peak_jitter = float(self.rng.normal(0, 1.5))
+        effective_peak = (
+            int(parameters.temporal_peak_hour) + int(round(peak_jitter))
+        ) % 24
+
+        # peak_hour = int(parameters.temporal_peak_hour)
 
         candidate_times: List[int] = []
         candidate_weights: List[float] = []
@@ -2313,11 +2353,14 @@ class SessionPopulator:
         for minute in range(start_minutes, end_minutes):
             hour_of_day = (minute // 60) % 24
 
-            # Stronger temporal weighting than before
             distance = min(
-                abs(hour_of_day - peak_hour), 24 - abs(hour_of_day - peak_hour)
+                abs(hour_of_day - effective_peak),
+                24 - abs(hour_of_day - effective_peak),
             )
-            weight = float(np.exp(-(distance**2) / (2 * 2.5**2))) + 0.05
+            sigma = 1.5
+            weight = (
+                float(np.exp(-(distance**2) / (2 * sigma**2))) + 0.02
+            )  # Lower floor
 
             candidate_times.append(minute)
             candidate_weights.append(weight)
