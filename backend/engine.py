@@ -202,6 +202,91 @@ class LiteratureConstants:
         ActivityType.WINDING_DOWN: 0.90,
     }
 
+    APP_DURATION_PARAMS = {
+        AppCategory.VIDEO_STREAMING: {
+            "base_mean": 180,  # 3 min for quick video check
+            "base_std": 90,
+            "extended_mean": 2400,  # 40 min for TV episode/movie
+            "extended_std": 1200,
+            "extended_prob": 0.30,  # 30% chance of extended viewing session
+            "max_duration": 10800,  # 3 hours max (movie)
+        },
+        AppCategory.GAMES: {
+            "base_mean": 300,  # 5 min for quick game
+            "base_std": 150,
+            "extended_mean": 1800,  # 30 min gaming session
+            "extended_std": 900,
+            "extended_prob": 0.25,
+            "max_duration": 7200,  # 2 hours max
+        },
+        AppCategory.SOCIAL_MEDIA: {
+            "base_mean": 120,  # 2 min scroll
+            "base_std": 60,
+            "extended_mean": 900,  # 15 min deep scroll
+            "extended_std": 450,
+            "extended_prob": 0.20,
+            "max_duration": 3600,
+        },
+        AppCategory.MESSAGING: {
+            "base_mean": 60,  # 1 min quick reply
+            "base_std": 30,
+            "extended_mean": 300,  # 5 min conversation
+            "extended_std": 150,
+            "extended_prob": 0.15,
+            "max_duration": 1800,
+        },
+        AppCategory.NEWS_READING: {
+            "base_mean": 90,  # 1.5 min article skim
+            "base_std": 45,
+            "extended_mean": 600,  # 10 min deep reading
+            "extended_std": 300,
+            "extended_prob": 0.20,
+            "max_duration": 2400,
+        },
+        AppCategory.MUSIC_AUDIO: {
+            "base_mean": 180,  # 3 min (one song)
+            "base_std": 60,
+            "extended_mean": 3600,  # 60 min (playlist/podcast)
+            "extended_std": 1800,
+            "extended_prob": 0.35,  # Music often plays longer
+            "max_duration": 14400,  # 4 hours (background listening)
+        },
+        AppCategory.PRODUCTIVITY_WORK: {
+            "base_mean": 120,  # 2 min quick check
+            "base_std": 60,
+            "extended_mean": 1200,  # 20 min work session
+            "extended_std": 600,
+            "extended_prob": 0.25,
+            "max_duration": 3600,
+        },
+        AppCategory.MAPS_NAVIGATION: {
+            "base_mean": 60,  # 1 min quick lookup
+            "base_std": 30,
+            "extended_mean": 1800,  # 30 min (active navigation)
+            "extended_std": 900,
+            "extended_prob": 0.40,  # Often used for full trips
+            "max_duration": 7200,
+        },
+        AppCategory.SHOPPING: {
+            "base_mean": 90,  # 1.5 min quick browse
+            "base_std": 45,
+            "extended_mean": 900,  # 15 min shopping session
+            "extended_std": 450,
+            "extended_prob": 0.20,
+            "max_duration": 3600,
+        },
+    }
+
+    # Default for any unlisted category
+    DEFAULT_DURATION_PARAMS = {
+        "base_mean": 60,
+        "base_std": 30,
+        "extended_mean": 300,
+        "extended_std": 150,
+        "extended_prob": 0.15,
+        "max_duration": 1800,
+    }
+
 
 # =============================================================================
 # SECTION 2: SURVEY MAPPINGS
@@ -2089,11 +2174,17 @@ class SessionPopulator:
         # Sort by timestamp
         all_sessions.sort(key=lambda s: s.timestamp)
 
+        # === FIX: FIRST overlap resolution - before reconciliation ===
+        all_sessions = self._resolve_session_overlaps(all_sessions)
+
         # Reconcile total duration to match target daily minutes
         all_sessions = self._reconcile_total_daily_duration(
             all_sessions,
             target_total_minutes=float(parameters.total_daily_minutes),
         )
+
+        # === FIX: SECOND overlap resolution - reconciliation may scale durations up ===
+        all_sessions = self._resolve_session_overlaps(all_sessions)
 
         # Assign sequential session IDs
         for i, session in enumerate(all_sessions):
@@ -2385,25 +2476,27 @@ class SessionPopulator:
         dimensions: BehavioralDimensions,
     ) -> PhoneSession:
         """
-        Generate a single phone session with all attributes.
-
-        Determines if session is glance vs engagement,
-        duration, app category, and other attributes.
+        Generate a single phone session with realistic app-specific durations.
         """
         # Determine if this is a glance or engaged session
         is_glance = self.rng.random() < parameters.glance_probability
 
         # Determine if user-initiated or notification-triggered
-        # Source: Heitmayer & Lahlou (2021) - 89% user-initiated
         is_user_initiated = self.rng.random() < LiteratureConstants.USER_INITIATED_RATIO
 
-        # Generate duration based on session type
+        # Select app category FIRST (needed for duration calculation)
+        app_category = self._select_app_category(
+            parameters, dimensions, segment, is_glance
+        )
+
+        # Generate duration based on session type AND app category
         if is_glance:
-            # Glance duration: truncated normal
-            # Source: Toth et al. (2025) - 5-25 sec for glances
-            duration = self.rng.normal(
-                LiteratureConstants.GLANCE_DURATION_MEAN,
-                LiteratureConstants.GLANCE_DURATION_SD,
+            # Glances are always short, regardless of app
+            duration = float(
+                self.rng.normal(
+                    LiteratureConstants.GLANCE_DURATION_MEAN,
+                    LiteratureConstants.GLANCE_DURATION_SD,
+                )
             )
             duration = np.clip(
                 duration,
@@ -2411,31 +2504,10 @@ class SessionPopulator:
                 LiteratureConstants.GLANCE_DURATION_MAX,
             )
         else:
-            # Determine if single-interaction or loop
-            # Source: Toth et al. (2025) - 78% single, 22% loops
-            is_loop = self.rng.random() < parameters.checking_burst_probability
-
-            if is_loop:
-                base_duration = LiteratureConstants.LOOP_SESSION_MEAN
-                duration_std = LiteratureConstants.LOOP_SESSION_SD
-            else:
-                base_duration = LiteratureConstants.SINGLE_SESSION_MEAN
-                duration_std = LiteratureConstants.SINGLE_SESSION_SD
-
-            # Apply context multiplier
-            duration = self.rng.normal(base_duration, duration_std)
-            duration *= segment.duration_multiplier
-
-            # Ensure reasonable bounds
-            duration = max(15, min(duration, 1800))  # 15 sec to 30 min
-
-        # Select app category based on weights
-        app_category = self._select_app_category(
-            parameters,
-            dimensions,
-            segment,
-            is_glance,
-        )
+            # Get app-specific duration parameters
+            duration = self._generate_app_specific_duration(
+                app_category, segment, dimensions
+            )
 
         # Convert timestamp to datetime
         hours = ts_minutes // 60
@@ -2446,17 +2518,14 @@ class SessionPopulator:
         timestamp = datetime.strptime(
             f"{date} {hours:02d}:{minutes:02d}:00", "%Y-%m-%d %H:%M:%S"
         )
+        timestamp += timedelta(seconds=int(self.rng.integers(0, 60)))
 
-        # Add some seconds randomization
-        timestamp += timedelta(seconds=float(self.rng.integers(0, 60)))
-
-        lat: Optional[float] = None
-        lon: Optional[float] = None
+        lat, lon = None, None
         if segment.location_coords is not None:
             lat, lon = segment.location_coords[0], segment.location_coords[1]
 
         return PhoneSession(
-            session_id="",  # Will be assigned later
+            session_id="",
             timestamp=timestamp,
             duration_seconds=float(duration),
             app_category=app_category,
@@ -2468,6 +2537,213 @@ class SessionPopulator:
             latitude=lat,
             longitude=lon,
         )
+
+    def _generate_app_specific_duration(
+        self,
+        app_category: AppCategory,
+        segment: ScheduleSegment,
+        dimensions: BehavioralDimensions,
+    ) -> float:
+        """
+        Generate session duration with realistic variety.
+
+        Extended sessions use content-type archetypes:
+        - Video: short clip (5min), YouTube (15min), TV episode (25/45min), movie (120min)
+        - Music: single song (4min), short playlist (20min), long playlist (60min+)
+        - Games: quick session (10min), medium (30min), long (60min+)
+        """
+        params = LiteratureConstants.APP_DURATION_PARAMS.get(
+            app_category, LiteratureConstants.DEFAULT_DURATION_PARAMS
+        )
+
+        # Calculate extended session probability with context modifiers
+        extended_prob = params["extended_prob"]
+
+        if segment.context in {ContextType.HOME_EVENING, ContextType.HOME_NIGHT}:
+            extended_prob *= 1.4
+        elif segment.activity == ActivityType.LEISURE:
+            extended_prob *= 1.3
+        elif segment.activity == ActivityType.WORKING:
+            extended_prob *= 0.4
+
+        # Attentional granularity effect
+        granularity_modifier = 1.0 + (0.5 - dimensions.attentional_granularity)
+        extended_prob *= granularity_modifier
+        extended_prob = min(extended_prob, 0.55)
+
+        is_extended = self.rng.random() < extended_prob
+
+        if is_extended:
+            duration = self._generate_extended_duration(app_category, params)
+        else:
+            # Regular session - normal distribution with some spread
+            base = params["base_mean"]
+            std = params["base_std"]
+            duration = float(self.rng.normal(base, std))
+            duration = max(15, duration)
+
+        # Only apply context multiplier to NON-extended sessions
+        # Extended sessions represent intentional content consumption
+        if not is_extended:
+            duration *= segment.duration_multiplier
+
+        # Hard cap
+        duration = min(duration, params["max_duration"])
+
+        return duration
+
+    def _generate_extended_duration(
+        self,
+        app_category: AppCategory,
+        params: dict,
+    ) -> float:
+        """
+        Generate extended session duration using content archetypes.
+
+        Instead of one log-normal centered on a single mean, we randomly
+        select from realistic "content types" for each app category.
+        """
+
+        # Define content archetypes for each app type
+        # Format: (duration_seconds, weight) - weight determines relative probability
+        CONTENT_ARCHETYPES = {
+            AppCategory.VIDEO_STREAMING: [
+                (180, 0.15),  # 3 min - short clip
+                (480, 0.20),  # 8 min - YouTube short
+                (900, 0.20),  # 15 min - YouTube medium
+                (1500, 0.15),  # 25 min - TV comedy episode
+                (2700, 0.15),  # 45 min - TV drama episode
+                (5400, 0.10),  # 90 min - movie
+                (7200, 0.05),  # 120 min - long movie
+            ],
+            AppCategory.MUSIC_AUDIO: [
+                (210, 0.10),  # 3.5 min - single song
+                (420, 0.15),  # 7 min - 2 songs
+                (900, 0.20),  # 15 min - short playlist
+                (1800, 0.20),  # 30 min - medium playlist
+                (3600, 0.20),  # 60 min - long playlist/podcast
+                (7200, 0.15),  # 120 min - background listening
+            ],
+            AppCategory.GAMES: [
+                (300, 0.20),  # 5 min - quick game
+                (600, 0.25),  # 10 min - casual session
+                (1200, 0.25),  # 20 min - engaged session
+                (1800, 0.15),  # 30 min - longer session
+                (3600, 0.10),  # 60 min - deep session
+                (5400, 0.05),  # 90 min - marathon
+            ],
+            AppCategory.SOCIAL_MEDIA: [
+                (180, 0.25),  # 3 min - quick scroll
+                (420, 0.30),  # 7 min - medium browse
+                (720, 0.25),  # 12 min - longer browse
+                (1200, 0.15),  # 20 min - deep dive
+                (1800, 0.05),  # 30 min - rabbit hole
+            ],
+            AppCategory.NEWS_READING: [
+                (180, 0.30),  # 3 min - one article
+                (420, 0.30),  # 7 min - couple articles
+                (720, 0.25),  # 12 min - several articles
+                (1200, 0.10),  # 20 min - deep reading
+                (1800, 0.05),  # 30 min - news binge
+            ],
+        }
+
+        # Get archetypes for this app, or use default
+        archetypes = CONTENT_ARCHETYPES.get(
+            app_category,
+            [
+                (300, 0.40),
+                (600, 0.35),
+                (1200, 0.20),
+                (1800, 0.05),
+            ],
+        )
+
+        # Select an archetype based on weights
+        durations = [a[0] for a in archetypes]
+        weights = np.array([a[1] for a in archetypes])
+        weights = weights / weights.sum()  # Normalize
+
+        base_duration = float(self.rng.choice(durations, p=weights))
+
+        # Add ±25% jitter to avoid exact clustering
+        jitter = float(self.rng.uniform(0.75, 1.25))
+        duration = base_duration * jitter
+
+        return duration
+
+    def _resolve_session_overlaps(
+        self,
+        sessions: List[PhoneSession],
+    ) -> List[PhoneSession]:
+        """
+        Remove or adjust sessions that overlap with previous sessions.
+        You can't start a new session while still in another one.
+        """
+        if len(sessions) <= 1:
+            return sessions
+
+        # Sort by timestamp
+        sorted_sessions = sorted(sessions, key=lambda s: s.timestamp)
+
+        resolved: List[PhoneSession] = []
+        current_end_time: Optional[datetime] = None
+
+        for session in sorted_sessions:
+            session_start = session.timestamp
+            session_end = session_start + timedelta(seconds=session.duration_seconds)
+
+            if current_end_time is None:
+                # First session, always keep
+                resolved.append(session)
+                current_end_time = session_end
+            elif session_start >= current_end_time:
+                # No overlap, keep session
+                resolved.append(session)
+                current_end_time = session_end
+            else:
+                # OVERLAP DETECTED
+                gap_seconds = (session_start - resolved[-1].timestamp).total_seconds()
+
+                if gap_seconds < 30:
+                    # Sessions too close together - skip this one entirely
+                    # (Likely a generation artifact)
+                    continue
+                else:
+                    # There's some gap - truncate the PREVIOUS session to fit
+                    # This preserves both sessions but makes the first one shorter
+                    available_duration = gap_seconds - 10  # 10 sec buffer
+
+                    if available_duration >= 30:  # Keep if at least 30 sec
+                        # Update previous session's duration
+                        prev_session = resolved[-1]
+                        truncated_duration = min(
+                            prev_session.duration_seconds, available_duration
+                        )
+
+                        # Create new session object with truncated duration
+                        resolved[-1] = PhoneSession(
+                            session_id=prev_session.session_id,
+                            timestamp=prev_session.timestamp,
+                            duration_seconds=truncated_duration,
+                            app_category=prev_session.app_category,
+                            is_glance=prev_session.is_glance,
+                            is_user_initiated=prev_session.is_user_initiated,
+                            context=prev_session.context,
+                            activity=prev_session.activity,
+                            location_label=prev_session.location_label,
+                            latitude=prev_session.latitude,
+                            longitude=prev_session.longitude,
+                        )
+
+                        # Now add the new session
+                        resolved.append(session)
+                        current_end_time = session_end
+                    else:
+                        # Not enough room - skip the new session
+                        continue
+
+        return resolved
 
     def _select_app_category(
         self,
