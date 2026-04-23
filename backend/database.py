@@ -1,19 +1,19 @@
 # database.py
 
 """
-SQLite persistence for personas.
-Supports both local SQLite and Turso (libSQL) for serverless deployment.
+PostgreSQL persistence for personas.
+Uses asyncpg for async PostgreSQL access.
+Compatible with Neon, Supabase, or any PostgreSQL provider.
 """
 
 import json
 import os
 import secrets
-import uuid
 from datetime import datetime
-from pathlib import Path
 from typing import Optional, List, Any
+from contextlib import asynccontextmanager
 
-import aiosqlite
+import asyncpg
 
 from models import (
     ComprehensiveSurveyInput,
@@ -26,34 +26,48 @@ from models import (
 # CONFIGURATION
 # ============================================================
 
-# Use environment variable for deployment flexibility
-# Local: DATABASE_URL not set -> uses personas.db
-# Turso: DATABASE_URL=libsql://your-db.turso.io?authToken=xxx
-DATABASE_URL = os.getenv("DATABASE_URL", "personas.db")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-# For local SQLite, extract just the path
-if DATABASE_URL.startswith("libsql://"):
-    # Turso URL - would need libsql-client for full support
-    # For now, fall back to local SQLite
-    DATABASE_PATH = Path("personas.db")
-    print(
-        f"⚠️ Turso URL detected but using local SQLite. Set up libsql-client for production."
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL environment variable is required. "
+        "Example: postgresql://user:pass@host/dbname?sslmode=require"
     )
-else:
-    DATABASE_PATH = Path(DATABASE_URL)
+
+# Connection pool (initialized on startup)
+_pool: Optional[asyncpg.Pool] = None
+
+
+async def get_pool() -> asyncpg.Pool:
+    """Get or create the connection pool."""
+    global _pool
+    if _pool is None:
+        _pool = await asyncpg.create_pool(
+            DATABASE_URL,
+            min_size=1,
+            max_size=10,
+            command_timeout=60,
+        )
+    return _pool
+
+
+async def close_pool():
+    """Close the connection pool."""
+    global _pool
+    if _pool:
+        await _pool.close()
+        _pool = None
 
 
 # ============================================================
 # SCHEMA
 # ============================================================
 
-SCHEMA_VERSION = 2
-
 CREATE_TABLES_SQL = """
 -- Main personas table
 CREATE TABLE IF NOT EXISTS personas (
     id TEXT PRIMARY KEY,
-    created_at TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     
     -- Denormalized fields for quick queries/filtering
     city TEXT,
@@ -61,113 +75,33 @@ CREATE TABLE IF NOT EXISTS personas (
     age_range TEXT,
     
     -- Full JSON data
-    survey_input TEXT NOT NULL,
-    dimensions TEXT NOT NULL,
-    parameters TEXT NOT NULL,
-    weekday_schedule TEXT,
-    weekend_schedule TEXT
+    survey_input JSONB NOT NULL,
+    dimensions JSONB NOT NULL,
+    parameters JSONB NOT NULL,
+    weekday_schedule JSONB,
+    weekend_schedule JSONB
 );
 
--- Index for listing/filtering
+-- Indexes for listing/filtering
 CREATE INDEX IF NOT EXISTS idx_personas_created_at ON personas(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_personas_city ON personas(city);
-
--- Schema version tracking
-CREATE TABLE IF NOT EXISTS schema_version (
-    version INTEGER PRIMARY KEY
-);
-"""
-
-MIGRATION_V2_SQL = """
--- Add denormalized columns if they don't exist
-ALTER TABLE personas ADD COLUMN city TEXT;
-ALTER TABLE personas ADD COLUMN occupation TEXT;
-ALTER TABLE personas ADD COLUMN age_range TEXT;
+CREATE INDEX IF NOT EXISTS idx_personas_occupation ON personas(occupation);
 """
 
 
 # ============================================================
-# INITIALIZATION & MIGRATIONS
+# INITIALIZATION
 # ============================================================
 
 
 async def init_db():
-    """Initialize database schema with migrations."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        # Check current schema version
-        try:
-            async with db.execute("SELECT MAX(version) FROM schema_version") as cursor:
-                row = await cursor.fetchone()
-                current_version = row[0] if row and row[0] else 0
-        except aiosqlite.OperationalError:
-            # Table doesn't exist yet
-            current_version = 0
+    """Initialize database schema."""
+    pool = await get_pool()
 
-        # Apply base schema
-        if current_version == 0:
-            await db.executescript(CREATE_TABLES_SQL)
-            await db.execute(
-                "INSERT OR REPLACE INTO schema_version (version) VALUES (?)",
-                (SCHEMA_VERSION,),
-            )
-            await db.commit()
-            print(f"✅ Database initialized at {DATABASE_PATH}")
-            return
+    async with pool.acquire() as conn:
+        await conn.execute(CREATE_TABLES_SQL)
 
-        # Apply migrations
-        if current_version < 2:
-            try:
-                # Add new columns (SQLite ADD COLUMN is idempotent-ish)
-                await db.execute("ALTER TABLE personas ADD COLUMN city TEXT")
-            except aiosqlite.OperationalError:
-                pass  # Column already exists
-
-            try:
-                await db.execute("ALTER TABLE personas ADD COLUMN occupation TEXT")
-            except aiosqlite.OperationalError:
-                pass
-
-            try:
-                await db.execute("ALTER TABLE personas ADD COLUMN age_range TEXT")
-            except aiosqlite.OperationalError:
-                pass
-
-            # Backfill from JSON for existing rows
-            await _backfill_denormalized_fields(db)
-
-            await db.execute(
-                "INSERT OR REPLACE INTO schema_version (version) VALUES (?)", (2,)
-            )
-            await db.commit()
-            print(f"✅ Database migrated to version 2")
-
-
-async def _backfill_denormalized_fields(db: aiosqlite.Connection):
-    """Backfill city/occupation/age_range from survey_input JSON."""
-    async with db.execute(
-        "SELECT id, survey_input FROM personas WHERE city IS NULL"
-    ) as cursor:
-        rows = await cursor.fetchall()
-
-    for row in rows:
-        persona_id, survey_json = row
-        try:
-            survey = json.loads(survey_json)
-            await db.execute(
-                """
-                UPDATE personas 
-                SET city = ?, occupation = ?, age_range = ?
-                WHERE id = ?
-                """,
-                (
-                    survey.get("city"),
-                    survey.get("occupation"),
-                    survey.get("age_range"),
-                    persona_id,
-                ),
-            )
-        except (json.JSONDecodeError, TypeError):
-            pass
+    print("✅ PostgreSQL database initialized")
 
 
 # ============================================================
@@ -186,84 +120,83 @@ async def save_persona(
     Save a generated persona to the database.
 
     Returns:
-        Short persona ID for easy sharing (8 characters).
+        Persona ID (URL-safe token).
     """
     persona_id = secrets.token_urlsafe(24)
+    pool = await get_pool()
 
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        await db.execute(
+    async with pool.acquire() as conn:
+        await conn.execute(
             """
             INSERT INTO personas (
-                id, created_at, 
-                city, occupation, age_range,
-                survey_input, dimensions, parameters, 
+                id, city, occupation, age_range,
+                survey_input, dimensions, parameters,
                 weekday_schedule, weekend_schedule
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             """,
+            persona_id,
+            survey.city,
+            survey.occupation,
             (
-                persona_id,
-                datetime.utcnow().isoformat(),
-                survey.city,
-                survey.occupation,
-                survey.age_range,
-                survey.model_dump_json(),
-                dimensions.model_dump_json(),
-                parameters.model_dump_json(),
-                weekday_schedule.model_dump_json() if weekday_schedule else None,
-                weekend_schedule.model_dump_json() if weekend_schedule else None,
+                survey.age_range.value
+                if hasattr(survey.age_range, "value")
+                else str(survey.age_range)
             ),
+            survey.model_dump_json(),
+            dimensions.model_dump_json(),
+            parameters.model_dump_json(),
+            weekday_schedule.model_dump_json() if weekday_schedule else None,
+            weekend_schedule.model_dump_json() if weekend_schedule else None,
         )
-        await db.commit()
 
     return persona_id
 
 
 async def get_persona(persona_id: str) -> Optional[dict]:
-    """
-    Retrieve a persona by ID.
+    """Retrieve a persona by ID."""
+    pool = await get_pool()
 
-    Returns dict with structure matching what frontend expects:
-    {
-        "persona_id": str,
-        "created_at": str,
-        "survey": dict,
-        "dimensions": dict,
-        "parameters": dict,
-        "schedule": dict | None  (weekday schedule)
-    }
-    """
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute(
-            "SELECT * FROM personas WHERE id = ?", (persona_id,)
-        ) as cursor:
-            row = await cursor.fetchone()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM personas WHERE id = $1", persona_id)
 
-            if not row:
-                return None
+        if not row:
+            return None
 
-            # Parse JSON fields
-            survey = json.loads(row["survey_input"])
-            dimensions = json.loads(row["dimensions"])
-            parameters = json.loads(row["parameters"])
-            weekday_schedule = (
-                json.loads(row["weekday_schedule"]) if row["weekday_schedule"] else None
-            )
-            weekend_schedule = (
-                json.loads(row["weekend_schedule"]) if row["weekend_schedule"] else None
-            )
+        # Parse JSON fields (asyncpg returns dicts for JSONB)
+        survey = (
+            row["survey_input"]
+            if isinstance(row["survey_input"], dict)
+            else json.loads(row["survey_input"])
+        )
+        dimensions = (
+            row["dimensions"]
+            if isinstance(row["dimensions"], dict)
+            else json.loads(row["dimensions"])
+        )
+        parameters = (
+            row["parameters"]
+            if isinstance(row["parameters"], dict)
+            else json.loads(row["parameters"])
+        )
+        weekday_schedule = row["weekday_schedule"]
+        weekend_schedule = row["weekend_schedule"]
 
-            return {
-                "persona_id": row["id"],
-                "created_at": row["created_at"],
-                "survey": survey,
-                "dimensions": dimensions,
-                "parameters": parameters,
-                "schedule": weekday_schedule,  # Primary schedule for display
-                "weekday_schedule": weekday_schedule,
-                "weekend_schedule": weekend_schedule,
-            }
+        if weekday_schedule and isinstance(weekday_schedule, str):
+            weekday_schedule = json.loads(weekday_schedule)
+        if weekend_schedule and isinstance(weekend_schedule, str):
+            weekend_schedule = json.loads(weekend_schedule)
+
+        return {
+            "persona_id": row["id"],
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+            "survey": survey,
+            "dimensions": dimensions,
+            "parameters": parameters,
+            "schedule": weekday_schedule,
+            "weekday_schedule": weekday_schedule,
+            "weekend_schedule": weekend_schedule,
+        }
 
 
 async def list_personas(
@@ -271,85 +204,69 @@ async def list_personas(
     city: Optional[str] = None,
     occupation: Optional[str] = None,
 ) -> List[dict]:
+    """List recent personas with optional filtering."""
+    pool = await get_pool()
+
+    # Build query with optional filters
+    query = """
+        SELECT id, created_at, city, occupation, age_range 
+        FROM personas
+        WHERE 1=1
     """
-    List recent personas with summary info.
+    params: List[Any] = []
+    param_count = 0
 
-    Args:
-        limit: Maximum number of personas to return
-        city: Optional filter by city (partial match)
-        occupation: Optional filter by occupation (partial match)
+    if city:
+        param_count += 1
+        query += f" AND city ILIKE ${param_count}"
+        params.append(f"%{city}%")
 
-    Returns list of dicts:
-    [
-        {
-            "persona_id": str,
-            "created_at": str,
-            "city": str,
-            "occupation": str,
-            "age_range": str,
-        },
-        ...
-    ]
-    """
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    if occupation:
+        param_count += 1
+        query += f" AND occupation ILIKE ${param_count}"
+        params.append(f"%{occupation}%")
 
-        # Build query with optional filters
-        query = "SELECT id, created_at, city, occupation, age_range FROM personas"
-        params: List[Any] = []
-        conditions = []
+    param_count += 1
+    query += f" ORDER BY created_at DESC LIMIT ${param_count}"
+    params.append(limit)
 
-        if city:
-            conditions.append("city LIKE ?")
-            params.append(f"%{city}%")
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(query, *params)
 
-        if occupation:
-            conditions.append("occupation LIKE ?")
-            params.append(f"%{occupation}%")
-
-        if conditions:
-            query += " WHERE " + " AND ".join(conditions)
-
-        query += " ORDER BY created_at DESC LIMIT ?"
-        params.append(limit)
-
-        async with db.execute(query, params) as cursor:
-            rows = await cursor.fetchall()
-
-            return [
-                {
-                    "persona_id": row["id"],
-                    "created_at": row["created_at"],
-                    "city": row["city"] or "Unknown",
-                    "occupation": row["occupation"] or "Unknown",
-                    "age_range": row["age_range"] or "Unknown",
-                }
-                for row in rows
-            ]
+        return [
+            {
+                "persona_id": row["id"],
+                "created_at": (
+                    row["created_at"].isoformat() if row["created_at"] else None
+                ),
+                "city": row["city"] or "Unknown",
+                "occupation": row["occupation"] or "Unknown",
+                "age_range": row["age_range"] or "Unknown",
+            }
+            for row in rows
+        ]
 
 
 async def delete_persona(persona_id: str) -> bool:
-    """
-    Delete a persona by ID.
+    """Delete a persona by ID."""
+    pool = await get_pool()
 
-    Returns True if deleted, False if not found.
-    """
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        cursor = await db.execute("DELETE FROM personas WHERE id = ?", (persona_id,))
-        await db.commit()
-        return cursor.rowcount > 0
+    async with pool.acquire() as conn:
+        result = await conn.execute("DELETE FROM personas WHERE id = $1", persona_id)
+        # Result is like "DELETE 1" or "DELETE 0"
+        return result.split()[-1] != "0"
 
 
 async def get_stats() -> dict:
     """Get database statistics."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        # Total count
-        async with db.execute("SELECT COUNT(*) FROM personas") as cursor:
-            row = await cursor.fetchone()
-            total = row[0] if row else 0
+    pool = await get_pool()
 
-        # Count by city (top 10)
-        async with db.execute(
+    async with pool.acquire() as conn:
+        # Total count
+        total = await conn.fetchval("SELECT COUNT(*) FROM personas")
+
+        # Top cities
+        cities = await conn.fetch(
             """
             SELECT city, COUNT(*) as count 
             FROM personas 
@@ -357,123 +274,93 @@ async def get_stats() -> dict:
             GROUP BY city 
             ORDER BY count DESC 
             LIMIT 10
-            """
-        ) as cursor:
-            cities = await cursor.fetchall()
+        """
+        )
 
-        # Recent activity (last 7 days)
-        async with db.execute(
+        # Recent activity
+        recent = await conn.fetch(
             """
             SELECT DATE(created_at) as date, COUNT(*) as count
             FROM personas
-            WHERE created_at >= datetime('now', '-7 days')
+            WHERE created_at >= NOW() - INTERVAL '7 days'
             GROUP BY DATE(created_at)
             ORDER BY date DESC
-            """
-        ) as cursor:
-            recent = await cursor.fetchall()
+        """
+        )
 
         return {
-            "total_personas": total,
-            "top_cities": [{"city": c[0], "count": c[1]} for c in cities],
-            "recent_activity": [{"date": r[0], "count": r[1]} for r in recent],
+            "total_personas": total or 0,
+            "top_cities": [{"city": r["city"], "count": r["count"]} for r in cities],
+            "recent_activity": [
+                {
+                    "date": r["date"].isoformat() if r["date"] else None,
+                    "count": r["count"],
+                }
+                for r in recent
+            ],
         }
 
 
-# ============================================================
-# EXPORT FUNCTIONS
-# ============================================================
-
-
 async def export_all_personas() -> List[dict]:
-    """Export all personas as a list of dicts (for backup/migration)."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM personas ORDER BY created_at") as cursor:
-            rows = await cursor.fetchall()
+    """Export all personas."""
+    pool = await get_pool()
 
-            return [
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT * FROM personas ORDER BY created_at")
+
+        results = []
+        for row in rows:
+            survey = (
+                row["survey_input"]
+                if isinstance(row["survey_input"], dict)
+                else json.loads(row["survey_input"])
+            )
+            dimensions = (
+                row["dimensions"]
+                if isinstance(row["dimensions"], dict)
+                else json.loads(row["dimensions"])
+            )
+            parameters = (
+                row["parameters"]
+                if isinstance(row["parameters"], dict)
+                else json.loads(row["parameters"])
+            )
+            weekday = row["weekday_schedule"]
+            weekend = row["weekend_schedule"]
+
+            if weekday and isinstance(weekday, str):
+                weekday = json.loads(weekday)
+            if weekend and isinstance(weekend, str):
+                weekend = json.loads(weekend)
+
+            results.append(
                 {
                     "persona_id": row["id"],
-                    "created_at": row["created_at"],
+                    "created_at": (
+                        row["created_at"].isoformat() if row["created_at"] else None
+                    ),
                     "city": row["city"],
                     "occupation": row["occupation"],
                     "age_range": row["age_range"],
-                    "survey": json.loads(row["survey_input"]),
-                    "dimensions": json.loads(row["dimensions"]),
-                    "parameters": json.loads(row["parameters"]),
-                    "weekday_schedule": (
-                        json.loads(row["weekday_schedule"])
-                        if row["weekday_schedule"]
-                        else None
-                    ),
-                    "weekend_schedule": (
-                        json.loads(row["weekend_schedule"])
-                        if row["weekend_schedule"]
-                        else None
-                    ),
+                    "survey": survey,
+                    "dimensions": dimensions,
+                    "parameters": parameters,
+                    "weekday_schedule": weekday,
+                    "weekend_schedule": weekend,
                 }
-                for row in rows
-            ]
+            )
 
-
-async def import_personas(personas: List[dict]) -> int:
-    """
-    Import personas from a list of dicts.
-
-    Returns number of personas imported.
-    """
-    count = 0
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        for p in personas:
-            try:
-                await db.execute(
-                    """
-                    INSERT OR IGNORE INTO personas (
-                        id, created_at, city, occupation, age_range,
-                        survey_input, dimensions, parameters,
-                        weekday_schedule, weekend_schedule
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        p["persona_id"],
-                        p.get("created_at", datetime.utcnow().isoformat()),
-                        p.get("city"),
-                        p.get("occupation"),
-                        p.get("age_range"),
-                        json.dumps(p["survey"]),
-                        json.dumps(p["dimensions"]),
-                        json.dumps(p["parameters"]),
-                        (
-                            json.dumps(p.get("weekday_schedule"))
-                            if p.get("weekday_schedule")
-                            else None
-                        ),
-                        (
-                            json.dumps(p.get("weekend_schedule"))
-                            if p.get("weekend_schedule")
-                            else None
-                        ),
-                    ),
-                )
-                count += 1
-            except Exception as e:
-                print(f"Failed to import persona {p.get('persona_id')}: {e}")
-
-        await db.commit()
-
-    return count
+        return results
 
 
 async def delete_all_personas() -> int:
-    """
-    Delete all personas from the database.
+    """Delete all personas."""
+    pool = await get_pool()
 
-    Returns:
-        Number of rows deleted.
-    """
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        cursor = await db.execute("DELETE FROM personas")
-        await db.commit()
-        return cursor.rowcount if cursor.rowcount is not None else 0
+    async with pool.acquire() as conn:
+        result = await conn.execute("DELETE FROM personas")
+        # Result is like "DELETE 42"
+        try:
+            return int(result.split()[-1])
+        except (ValueError, IndexError):
+            return 0

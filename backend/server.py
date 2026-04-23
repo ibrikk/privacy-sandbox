@@ -36,6 +36,7 @@ from database import (
     get_stats,
     export_all_personas,
     delete_all_personas,
+    close_pool,
 )
 
 # Import our models
@@ -133,7 +134,9 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    # ADD THESE 2 LINES:
     print("👋 Shutting down...")
+    await close_pool()
 
 
 app = FastAPI(

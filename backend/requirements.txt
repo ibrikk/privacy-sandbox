@@ -21,4 +21,4 @@ streamlit
 plotly
 pandas
 requests
-aiosqlite
+asyncpg
