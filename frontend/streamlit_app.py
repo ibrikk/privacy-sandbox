@@ -13,7 +13,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-API_URL = "http://localhost:8000"
+# API_URL = "http://localhost:8000"
+API_URL = "https://persona-api-644419103994.us-central1.run.app"
 
 # ============================================================
 # PAGE CONFIG
